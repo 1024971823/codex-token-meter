@@ -11,6 +11,20 @@ const WIDE = /[\u1100-\u115f\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff
 const width = (s) => [...strip(s)].reduce((w, ch) => w + (WIDE.test(ch) ? 2 : 1), 0);
 const padR = (s, n) => s + ' '.repeat(Math.max(0, n - width(s)));
 const padL = (s, n) => ' '.repeat(Math.max(0, n - width(s))) + s;
+// Clips a line containing ANSI codes to n display columns (wide chars count 2).
+const clip = (s, n) => {
+  let out = '';
+  let w = 0;
+  for (const m of s.matchAll(/\x1b\[[0-9;?]*[A-Za-z]|[\s\S]/gu)) {
+    const tok = m[0];
+    if (tok.length > 1 && tok[0] === '\x1b') { out += tok; continue; }
+    const cw = WIDE.test(tok) ? 2 : 1;
+    if (w + cw > n) return out + '\x1b[0m';
+    out += tok;
+    w += cw;
+  }
+  return out;
+};
 const trunc = (s, n) => {
   if (width(s) <= n) return s;
   let out = '';
@@ -100,7 +114,8 @@ export function runTui(store, { limit = 8, showAll = false } = {}) {
       lines.push(`${c.gray}  … 还有 ${hidden} 行未显示（放大终端窗口）${c.reset}`);
     }
     lines.push(footer);
-    const frame = lines.map((l) => l + ESC + 'K').join('\n') + ESC + 'J';
+    const maxCols = out.columns || 1000;
+    const frame = lines.map((l) => clip(l, maxCols) + ESC + 'K').join('\n') + ESC + 'J';
     if (frame !== lastFrame) {
       out.write(ESC + 'H' + frame);
       lastFrame = frame;
