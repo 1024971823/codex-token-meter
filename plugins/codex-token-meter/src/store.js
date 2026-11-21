@@ -88,9 +88,10 @@ export class RolloutStore extends EventEmitter {
   }
 
   start() {
-    this.scan();
+    this.scan({ full: true });
     this.poll();
-    this.timers.push(setInterval(() => this.scan(), this.scanMs));
+    let scans = 0;
+    this.timers.push(setInterval(() => this.scan({ full: ++scans % 15 === 0 }), this.scanMs));
     this.timers.push(setInterval(() => this.poll(), this.pollMs));
     return this;
   }
@@ -102,12 +103,14 @@ export class RolloutStore extends EventEmitter {
 
   /** One-shot load (no timers), for --json snapshots and tests. */
   loadOnce() {
-    this.scan();
+    this.scan({ full: true });
     this.poll();
     return this;
   }
 
-  scan() {
+  // Date-directory pruning skips old dirs; a periodic full scan still finds old rollouts that were
+  // resumed (appended to) recently.
+  scan({ full = false } = {}) {
     const cutoff = Date.now() - this.sinceMs;
     const walk = (dir, depth) => {
       let entries;
@@ -119,7 +122,7 @@ export class RolloutStore extends EventEmitter {
       for (const e of entries) {
         const p = path.join(dir, e.name);
         if (e.isDirectory()) {
-          if (depth < 3 && this.dirMayBeRecent(p, depth, cutoff)) walk(p, depth + 1);
+          if (depth < 3 && (full || this.dirMayBeRecent(p, depth, cutoff))) walk(p, depth + 1);
         } else if (ROLLOUT_RE.test(e.name) && !this.files.has(p)) {
           try {
             if (fs.statSync(p).mtimeMs >= cutoff) this.files.set(p, { offset: 0, buf: '', threadId: null });
@@ -316,11 +319,10 @@ export class RolloutStore extends EventEmitter {
         children: kids,
       };
     };
-    const roots = threads
+    const allRoots = threads
       .filter((t) => !(t.parentId && byId.has(t.parentId)))
       .map(view)
-      .sort((a, b) => b.lastActive - a.lastActive)
-      .slice(0, limit);
+      .sort((a, b) => b.lastActive - a.lastActive);
 
     const totals = { all: emptyUsage(), subagents: emptyUsage(), byModel: {} };
     const walk = (n, isSub) => {
@@ -329,7 +331,7 @@ export class RolloutStore extends EventEmitter {
       for (const [m, u] of Object.entries(n.byModel)) totals.byModel[m] = addUsage(totals.byModel[m] || emptyUsage(), u);
       n.children.forEach((c) => walk(c, true));
     };
-    roots.forEach((r) => walk(r, r.source.startsWith('subagent')));
-    return { version: this.version, generatedAt: Date.now(), codexHome: this.codexHome, sessions: roots, totals };
+    allRoots.forEach((r) => walk(r, r.source.startsWith('subagent')));
+    return { version: this.version, generatedAt: Date.now(), codexHome: this.codexHome, sessions: allRoots.slice(0, limit), totals };
   }
 }

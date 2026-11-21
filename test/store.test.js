@@ -105,3 +105,27 @@ test('falls back to token_count when token_usage_record is absent (older Codex)'
   assert.equal(n.byModel['gpt-5'].total, 110);
   assert.equal(n.byModel['gpt-5-mini'].total, 220);
 });
+
+test('global totals include sessions beyond the snapshot limit', () => {
+  const { home, day } = tmpHome();
+  for (const id of ['a', 'b', 'c']) {
+    fs.writeFileSync(
+      path.join(day, `rollout-2026-11-21T00-00-00-${id}.jsonl`),
+      line('session_meta', { id, source: 'cli' }) +
+        line('turn_context', { model: 'm' }) +
+        line('event_msg', { type: 'token_count', info: { total_token_usage: usage(10, 1), last_token_usage: usage(10, 1) } }),
+    );
+  }
+  const snap = new RolloutStore({ codexHome: home }).loadOnce().snapshot({ limit: 1 });
+  assert.equal(snap.sessions.length, 1);
+  assert.equal(snap.totals.all.total, 33);
+});
+
+test('finds recently resumed rollouts in old date directories', () => {
+  const { home } = tmpHome();
+  const old = path.join(home, 'sessions', '2020', '01', '01');
+  fs.mkdirSync(old, { recursive: true });
+  fs.writeFileSync(path.join(old, 'rollout-2020-01-01T00-00-00-old.jsonl'), line('session_meta', { id: 'resumed', source: 'cli' }));
+  const snap = new RolloutStore({ codexHome: home }).loadOnce().snapshot();
+  assert.deepEqual(snap.sessions.map((s) => s.id), ['resumed']);
+});
