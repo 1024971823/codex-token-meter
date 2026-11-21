@@ -16,7 +16,7 @@ export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
       for (const res of clients) res.write(data);
     }, 150);
   };
-  const allowedHosts = new Set(['localhost', '127.0.0.1', '[::1]', host]);
+  const allowedHosts = new Set(['localhost', '127.0.0.1', '[::1]', host.includes(':') ? `[${host}]` : host]);
 
   const server = http.createServer((req, res) => {
     let url;
