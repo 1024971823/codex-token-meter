@@ -8,12 +8,21 @@ const WEB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'w
 export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
   const clients = new Set();
   let pending = null;
+  const broadcast = () => {
+    const data = `data: ${JSON.stringify(store.snapshot({ limit: 30 }))}\n\n`;
+    for (const res of clients) {
+      try {
+        res.write(data);
+      } catch {
+        clients.delete(res);
+      }
+    }
+  };
   const push = () => {
     if (pending) return;
     pending = setTimeout(() => {
       pending = null;
-      const data = `data: ${JSON.stringify(store.snapshot({ limit: 30 }))}\n\n`;
-      for (const res of clients) res.write(data);
+      broadcast();
     }, 150);
   };
   const allowedHosts = new Set(['localhost', '127.0.0.1', '[::1]', host.includes(':') ? `[${host}]` : host]);
@@ -38,6 +47,7 @@ export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
       res.write(`data: ${JSON.stringify(store.snapshot({ limit: 30 }))}\n\n`);
       clients.add(res);
+      res.on('error', () => clients.delete(res));
       req.on('close', () => clients.delete(res));
       return;
     }
@@ -55,7 +65,16 @@ export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
     server.once('error', reject);
     server.listen(port, host, () => {
       store.on('change', push);
-      setInterval(() => { for (const res of clients) res.write(': ping\n\n'); }, 15000).unref();
+      setInterval(() => { if (clients.size) broadcast(); }, 1000).unref();
+      setInterval(() => {
+        for (const res of clients) {
+          try {
+            res.write(': ping\n\n');
+          } catch {
+            clients.delete(res);
+          }
+        }
+      }, 15000).unref();
       resolve(server);
     });
   });

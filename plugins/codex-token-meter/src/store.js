@@ -40,7 +40,7 @@ function describeSource(source) {
     if (sub.other) return { kind: 'subagent', subKind: String(sub.other) };
     return { kind: 'subagent', subKind: Object.keys(sub)[0] };
   }
-  if (source.custom) return { kind: String(source.custom) };
+  if (source.custom) return { kind: typeof source.custom === 'string' ? source.custom : 'custom' };
   if (source.internal) return { kind: 'internal', subKind: String(source.internal) };
   return { kind: Object.keys(source)[0] || 'unknown' };
 }
@@ -131,6 +131,21 @@ export class RolloutStore extends EventEmitter {
       }
     };
     walk(this.sessionsDir, 0);
+    // Drop files (and their threads) idle beyond the window, so a long-lived daemon's
+    // memory and per-poll stat calls stay bounded. A file that later resumes is
+    // re-discovered by its fresh mtime and re-read from offset 0.
+    const stale = new Set();
+    for (const [p] of this.files) {
+      let mtime = 0;
+      try {
+        mtime = fs.statSync(p).mtimeMs;
+      } catch {}
+      if (mtime < cutoff) {
+        this.files.delete(p);
+        stale.add(p);
+      }
+    }
+    for (const [id, t] of this.threads) if (t.file && stale.has(t.file)) this.threads.delete(id);
   }
 
   // sessions/YYYY/MM/DD — skip whole year/month/day directories older than the window.
@@ -214,6 +229,12 @@ export class RolloutStore extends EventEmitter {
     // Records inherited from a forked parent precede the sub-agent's own history.
     if (t.historyStart != null && rec.ordinal != null && rec.ordinal < t.historyStart) return false;
 
+    if (rec.type === 'compacted') {
+      t.compacted = true;
+      t.updatedAt = ts;
+      return true;
+    }
+
     if (rec.type === 'turn_context') {
       if (payload.model) t.model = payload.model;
       t.effort = payload.effort ?? payload.reasoning_effort ?? t.effort;
@@ -264,8 +285,10 @@ export class RolloutStore extends EventEmitter {
   }
 
   applyTotals(t, total, last, ts) {
-    if (total.total < t.usage.total) return; // stale / replayed snapshot
-    const delta = subUsage(total, t.usage);
+    // A lower cumulative total means the counter was reset (e.g. a new accounting
+    // epoch after compaction); accept it as a fresh baseline instead of freezing.
+    const reset = total.total < t.usage.total;
+    const delta = reset ? total : subUsage(total, t.usage);
     if (delta.total === 0 && total.total === t.usage.total) return;
     const model = t.model || 'unknown';
     t.byModel[model] = addUsage(t.byModel[model] || emptyUsage(), delta);
@@ -307,6 +330,7 @@ export class RolloutStore extends EventEmitter {
         cwd: t.cwd,
         contextWindow: t.contextWindow,
         contextUsed: t.lastContextTokens || 0,
+        compacted: !!t.compacted,
         usage: t.usage,
         last: t.last,
         byModel: t.byModel,

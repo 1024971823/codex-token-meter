@@ -48,6 +48,22 @@
   .delta { color:var(--green); font-size:12px; }
   .bar { height:6px; background:#21262d; border-radius:3px; overflow:hidden; width:70px; display:inline-block; vertical-align:middle; margin-left:6px; }
   .bar i { display:block; height:100%; background:var(--accent); }
+  .bar i.working {
+    background-image: linear-gradient(45deg, rgba(255,255,255,.35) 25%, transparent 25%, transparent 50%, rgba(255,255,255,.35) 50%, rgba(255,255,255,.35) 75%, transparent 75%);
+    background-size: 14px 14px;
+    animation: stripes .7s linear infinite;
+    box-shadow: 0 0 6px var(--accent);
+  }
+  @keyframes stripes { to { background-position: 14px 0; } }
+  .st.running { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.4; } }
+  .working-badge { display:inline-flex; align-items:center; gap:6px; color:var(--green); font-size:12px; border:1px solid var(--green); border-radius:999px; padding:2px 10px; }
+  .working-badge .spin { display:inline-block; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  select { background:var(--panel); color:var(--fg); border:1px solid var(--border); border-radius:6px; font-size:12px; padding:2px 6px; }
+  @media (prefers-reduced-motion: reduce) {
+    .bar i.working, .st.running, .working-badge .spin, .flash { animation:none; }
+  }
   svg.spark { vertical-align:middle; }
   .empty { color:var(--dim); text-align:center; padding:60px 0; }
   .foot { color:var(--dim); font-size:12px; padding:8px 14px; border-top:1px solid var(--border); }
@@ -57,8 +73,17 @@
 <header>
   <h1>Codex Token Meter</h1>
   <span class="live"><span class="dot" id="dot"></span><span id="liveText">连接中…</span></span>
+  <span id="working"></span>
   <span class="spacer"></span>
-  <label><input type="checkbox" id="onlyActive" checked /> 只看最近 30 分钟活跃</label>
+  <label>显示
+    <select id="activeWindow">
+      <option value="30" selected>最近 30 分钟活跃</option>
+      <option value="120">最近 2 小时活跃</option>
+      <option value="720">最近 12 小时活跃</option>
+      <option value="1440">最近 24 小时活跃</option>
+      <option value="0">全部会话</option>
+    </select>
+  </label>
   <span class="live" id="home"></span>
 </header>
 <main>
@@ -95,12 +120,12 @@ function row(n, prefix) {
     <td><span class="tree">${prefix}</span><span class="agent ${isMain ? '' : 'sub'}">${esc(isMain ? 'main' : n.name)}</span><span class="id">${esc(n.id.slice(-8))}</span></td>
     <td class="role">${esc(n.role || '-')}</td>
     <td class="model">${esc(n.model || '-')}${n.effort ? ` <span class="id">${esc(n.effort)}</span>` : ''}</td>
-    <td class="st ${n.status}">${STATUS[n.status] || esc(n.status)}</td>
+    <td class="st ${n.status}">${STATUS[n.status] || esc(n.status)}${n.compacted ? ' <span class="id" title="发生过上下文压缩">⤺</span>' : ''}</td>
     <td>${fmt(n.usage.input)}</td><td>${fmt(n.usage.cached)}</td><td>${fmt(n.usage.output)}</td><td>${fmt(n.usage.reasoning)}</td>
     <td class="total">${fmt(n.usage.total)}</td>
     <td class="delta">${n.last.total ? '+' + fmt(n.last.total) : '-'}</td>
     <td>${n.requests}</td>
-    <td>${ctxPct === null ? '-' : ctxPct + '%<span class="bar"><i style="width:' + ctxPct + '%"></i></span>'}</td>
+    <td>${ctxPct === null ? '-' : ctxPct + '%<span class="bar"><i class="' + (n.status === 'running' ? 'working' : '') + '" style="width:' + ctxPct + '%"></i></span>'}</td>
     <td>${spark(n.history)}</td>
     <td>${ago(n.updatedAt)}</td>
   </tr>`;
@@ -118,6 +143,11 @@ function rows(n, prefix, childIndent) {
 function render() {
   if (!state) return;
   const T = state.totals;
+  let runningCount = 0;
+  state.sessions.forEach(function walk(n) { if (n.status === 'running') runningCount++; n.children.forEach(walk); });
+  $('working').innerHTML = runningCount
+    ? `<span class="working-badge"><span class="spin">◌</span>${runningCount} 个 agent 工作中</span>`
+    : '';
   $('home').textContent = state.codexHome;
   const sub = T.subagents;
   $('cards').innerHTML =
@@ -130,8 +160,9 @@ function render() {
     .map(([m, u]) => `<span class="chip"><b>${esc(m)}</b>${fmt(u.total)} <span class="id">in ${fmt(u.input)} / out ${fmt(u.output)}</span></span>`).join('');
 
   let sessions = state.sessions;
-  if ($('onlyActive').checked) {
-    const active = sessions.filter((s) => Date.now() - s.lastActive < 30 * 60 * 1000);
+  const mins = Number($('activeWindow').value);
+  if (mins) {
+    const active = sessions.filter((s) => Date.now() - s.lastActive < mins * 60 * 1000);
     sessions = active.length ? active : sessions.slice(0, 1);
   }
   if (!sessions.length) { $('sessions').innerHTML = '<div class="empty">还没有会话。运行 codex 后这里会实时显示。</div>'; return; }
@@ -154,7 +185,10 @@ function connect() {
   es.onmessage = (e) => { state = JSON.parse(e.data); render(); };
   es.onerror = () => { $('dot').classList.remove('on'); $('liveText').textContent = '已断开，重连中…'; };
 }
-$('onlyActive').onchange = render;
+const winSel = $('activeWindow');
+winSel.value = localStorage.getItem('ctm.activeWindow') ?? '30';
+if (!winSel.value) winSel.value = '30';
+winSel.onchange = () => { localStorage.setItem('ctm.activeWindow', winSel.value); render(); };
 setInterval(() => { if (state) { prevTotals.clear(); state.sessions.forEach(function walk(n) { prevTotals.set(n.id, n.usage.total); n.children.forEach(walk); }); render(); } }, 5000);
 connect();
 </script>

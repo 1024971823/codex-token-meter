@@ -25,6 +25,7 @@ const HELP = `codex-token-meter — 实时查看 Codex 主代理/子代理的 to
   --since <hours>      载入最近多少小时的会话 (默认 24)
   --open               启动网页后自动打开浏览器
   --all                终端面板显示所有会话而不仅是活跃会话
+  --limit <n>          summary / json 最多显示多少个会话 (默认 summary 5, json 20)
 `;
 
 function parseArgs(argv) {
@@ -39,6 +40,7 @@ function parseArgs(argv) {
     else if (a === '--codex-home') opts.codexHome = path.resolve(next());
     else if (a === '--open') opts.open = true;
     else if (a === '--all') opts.all = true;
+    else if (a === '--limit') opts.limit = Number(next());
     else if (!a.startsWith('-')) opts.cmd = a;
   }
   return opts;
@@ -94,13 +96,13 @@ async function web(store, opts, { quiet = false } = {}) {
   return url;
 }
 
-function printSummary(snap) {
+function printSummary(snap, limit = 5) {
   const T = snap.totals;
   const line = (u) => `总计 ${fmtNum(u.total)} (输入 ${fmtNum(u.input)}, 缓存 ${fmtNum(u.cached)}, 输出 ${fmtNum(u.output)}, 推理 ${fmtNum(u.reasoning)})`;
   console.log(`全部: ${line(T.all)}`);
   console.log(`子代理: ${line(T.subagents)}`);
   for (const [m, u] of Object.entries(T.byModel)) console.log(`  模型 ${m}: ${line(u)}`);
-  for (const s of snap.sessions.slice(0, 5)) {
+  for (const s of snap.sessions.slice(0, limit)) {
     console.log(`\n会话 ${s.id} (${s.cwd || '-'})`);
     const walk = (n, indent) => {
       console.log(`${indent}${n.depth === 0 && !n.nickname ? 'main' : n.name} [${n.role || '-'}] ${n.model || '-'} ${n.status}: ${line(n.usage)}, ${n.requests} 次请求`);
@@ -118,10 +120,10 @@ switch (opts.cmd) {
     console.log(HELP);
     break;
   case 'json':
-    console.log(JSON.stringify(store.loadOnce().snapshot(), null, 2));
+    console.log(JSON.stringify(store.loadOnce().snapshot({ limit: opts.limit || 20 }), null, 2));
     break;
   case 'summary':
-    printSummary(store.loadOnce().snapshot());
+    printSummary(store.loadOnce().snapshot({ limit: opts.limit || 20 }), opts.limit);
     break;
   case 'web':
     store.start();
@@ -136,7 +138,12 @@ switch (opts.cmd) {
     runTui(store, { showAll: opts.all });
     break;
   case 'ensure-web': {
-    if (!(await runningMeter(opts.host, opts.port))) {
+    const running = await runningMeter(opts.host, opts.port);
+    if (running && !sameHome(running, opts)) {
+      console.error(`端口 ${opts.port} 已被监控 ${running.codexHome} 的仪表盘占用，未为 ${opts.codexHome} 启动`);
+      break;
+    }
+    if (!running) {
       const self = fileURLToPath(import.meta.url);
       const args = [self, 'web', '--port', String(opts.port), '--host', opts.host, '--codex-home', opts.codexHome, '--since', String(opts.since)];
       const child = spawn(process.execPath, args, {
