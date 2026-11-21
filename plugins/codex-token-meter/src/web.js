@@ -16,11 +16,20 @@ export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
       for (const res of clients) res.write(data);
     }, 150);
   };
-  store.on('change', push);
-  setInterval(() => { for (const res of clients) res.write(': ping\n\n'); }, 15000);
+  const allowedHosts = new Set(['localhost', '127.0.0.1', '[::1]', host]);
 
   const server = http.createServer((req, res) => {
-    const url = new URL(req.url, 'http://localhost');
+    let url;
+    try {
+      url = new URL(req.url, 'http://localhost');
+    } catch {
+      return res.writeHead(400).end('bad request');
+    }
+    // Reject foreign Host headers (DNS rebinding) unless explicitly bound to all interfaces.
+    const reqHost = (req.headers.host || '').replace(/:\d+$/, '');
+    if (host !== '0.0.0.0' && host !== '::' && !allowedHosts.has(reqHost)) {
+      return res.writeHead(403).end('forbidden host');
+    }
     if (url.pathname === '/api/state') {
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
       return res.end(JSON.stringify(store.snapshot({ limit: Number(url.searchParams.get('limit')) || 30 })));
@@ -34,7 +43,7 @@ export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
     }
     if (url.pathname === '/api/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ ok: true, app: 'codex-token-meter' }));
+      return res.end(JSON.stringify({ ok: true, app: 'codex-token-meter', codexHome: store.codexHome }));
     }
     if (url.pathname === '/' || url.pathname === '/index.html') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -44,6 +53,10 @@ export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
   });
   return new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(port, host, () => resolve(server));
+    server.listen(port, host, () => {
+      store.on('change', push);
+      setInterval(() => { for (const res of clients) res.write(': ping\n\n'); }, 15000).unref();
+      resolve(server);
+    });
   });
 }
