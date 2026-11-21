@@ -36,7 +36,7 @@ function parseArgs(argv) {
     else if (a === '--port') opts.port = Number(next());
     else if (a === '--host') opts.host = next();
     else if (a === '--since') opts.since = Number(next());
-    else if (a === '--codex-home') opts.codexHome = next();
+    else if (a === '--codex-home') opts.codexHome = path.resolve(next());
     else if (a === '--open') opts.open = true;
     else if (a === '--all') opts.all = true;
     else if (!a.startsWith('-')) opts.cmd = a;
