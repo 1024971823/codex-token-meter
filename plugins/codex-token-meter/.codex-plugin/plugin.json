@@ -1,0 +1,11 @@
+{
+  "name": "codex-token-meter",
+  "version": "0.1.0",
+  "description": "Live per-agent token usage (input / cached / output / reasoning) and model for Codex main agents and sub-agents, in a terminal TUI and a local web dashboard.",
+  "keywords": ["tokens", "usage", "subagent", "multi-agent", "dashboard", "monitor"],
+  "skills": "./skills",
+  "hooks": "./hooks.json",
+  "interface": {
+    "displayName": "Codex Token Meter"
+  }
+}
