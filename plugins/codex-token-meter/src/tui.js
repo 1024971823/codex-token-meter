@@ -92,7 +92,14 @@ export function runTui(store, { limit = 8, showAll = false } = {}) {
       }
       lines.push('');
     }
-    lines.push(`${c.gray}[q] 退出  [a] ${all ? '只看活跃会话' : '显示全部会话'}   ${new Date(now).toLocaleTimeString()}${c.reset}`);
+    const footer = `${c.gray}[q] 退出  [a] ${all ? '只看活跃会话' : '显示全部会话'}   ${new Date(now).toLocaleTimeString()}${c.reset}`;
+    const maxBody = Math.max(1, (out.rows || 1000) - 1);
+    if (lines.length > maxBody) {
+      const hidden = lines.length - (maxBody - 1);
+      lines.length = maxBody - 1;
+      lines.push(`${c.gray}  … 还有 ${hidden} 行未显示（放大终端窗口）${c.reset}`);
+    }
+    lines.push(footer);
     const frame = lines.map((l) => l + ESC + 'K').join('\n') + ESC + 'J';
     if (frame !== lastFrame) {
       out.write(ESC + 'H' + frame);
@@ -100,9 +107,9 @@ export function runTui(store, { limit = 8, showAll = false } = {}) {
     }
   }
 
-  out.write(ESC + '?1049h' + ESC + '?25l');
+  out.write(ESC + '?1049h' + ESC + '?25l' + ESC + '?7l');
   const cleanup = () => {
-    out.write(ESC + '?25h' + ESC + '?1049l');
+    out.write(ESC + '?7h' + ESC + '?25h' + ESC + '?1049l');
     process.exit(0);
   };
   process.on('SIGINT', cleanup);
