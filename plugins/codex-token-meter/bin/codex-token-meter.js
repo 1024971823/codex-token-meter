@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import http from 'node:http';
+import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { RolloutStore, defaultCodexHome } from '../src/store.js';
@@ -49,27 +50,42 @@ function openBrowser(url) {
   execFile(cmd, args, () => {});
 }
 
-function isMeterRunning(host, port) {
+/** Resolves to the running meter's health payload ({ codexHome, ... }) or null. */
+function runningMeter(host, port) {
   return new Promise((resolve) => {
     const req = http.get({ host, port, path: '/api/health', timeout: 800 }, (res) => {
       let body = '';
       res.on('data', (d) => (body += d));
-      res.on('end', () => resolve(body.includes('codex-token-meter')));
+      res.on('end', () => {
+        try {
+          const h = JSON.parse(body);
+          resolve(h.app === 'codex-token-meter' ? h : null);
+        } catch {
+          resolve(null);
+        }
+      });
     });
-    req.on('error', () => resolve(false));
-    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
   });
 }
+
+const sameHome = (h, opts) => !h.codexHome || path.resolve(h.codexHome) === path.resolve(opts.codexHome);
 
 async function web(store, opts, { quiet = false } = {}) {
   const url = `http://${opts.host === '0.0.0.0' ? '127.0.0.1' : opts.host}:${opts.port}`;
   try {
     await startWeb(store, opts);
   } catch (e) {
-    if (e.code === 'EADDRINUSE' && (await isMeterRunning(opts.host, opts.port))) {
+    const running = e.code === 'EADDRINUSE' ? await runningMeter(opts.host, opts.port) : null;
+    if (running && !sameHome(running, opts)) {
+      console.error(`端口 ${opts.port} 已被监控 ${running.codexHome} 的仪表盘占用，请用 --port 换一个端口`);
+      process.exit(1);
+    }
+    if (running) {
       if (!quiet) console.error(`仪表盘已在运行: ${url}`);
       if (opts.open) openBrowser(url);
-      return url;
+      return null;
     }
     throw e;
   }
@@ -109,7 +125,10 @@ switch (opts.cmd) {
     break;
   case 'web':
     store.start();
-    await web(store, opts);
+    if (!(await web(store, opts))) {
+      store.stop();
+      process.exit(0);
+    }
     break;
   case 'both':
     store.start();
@@ -117,9 +136,10 @@ switch (opts.cmd) {
     runTui(store, { showAll: opts.all });
     break;
   case 'ensure-web': {
-    if (!(await isMeterRunning(opts.host, opts.port))) {
+    if (!(await runningMeter(opts.host, opts.port))) {
       const self = fileURLToPath(import.meta.url);
-      const child = spawn(process.execPath, [self, 'web', '--port', String(opts.port), '--host', opts.host, '--codex-home', opts.codexHome], {
+      const args = [self, 'web', '--port', String(opts.port), '--host', opts.host, '--codex-home', opts.codexHome, '--since', String(opts.since)];
+      const child = spawn(process.execPath, args, {
         detached: true,
         stdio: 'ignore',
       });
