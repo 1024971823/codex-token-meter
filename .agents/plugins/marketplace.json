@@ -1,0 +1,12 @@
+{
+  "name": "codex-token-meter",
+  "plugins": [
+    {
+      "name": "codex-token-meter",
+      "source": {
+        "source": "local",
+        "path": "./plugins/codex-token-meter"
+      }
+    }
+  ]
+}
