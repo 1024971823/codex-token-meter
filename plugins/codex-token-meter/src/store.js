@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
+import { estimateCost, estimateCostByModel, loadPricing, PRICING_CURRENCY } from './pricing.js';
 
 const ROLLOUT_RE = /^rollout-.*\.jsonl$/;
 const USAGE_KEYS = ['input', 'cached', 'cacheWrite', 'output', 'reasoning', 'total'];
@@ -74,8 +75,10 @@ function newThread(id, file) {
 }
 
 export class RolloutStore extends EventEmitter {
-  constructor({ codexHome = defaultCodexHome(), sinceHours = 24, pollMs = 500, scanMs = 2000 } = {}) {
+  constructor({ codexHome = defaultCodexHome(), sinceHours = 24, pollMs = 500, scanMs = 2000, pricingFile, pricing } = {}) {
     super();
+    // Pricing override: --pricing-file (or CODEX_TOKEN_METER_PRICING env) wins over the built-in table.
+    this.pricing = pricing || loadPricing({ pricingFile });
     this.codexHome = codexHome;
     this.sessionsDir = path.join(codexHome, 'sessions');
     this.sinceMs = sinceHours * 3600 * 1000;
@@ -315,6 +318,20 @@ export class RolloutStore extends EventEmitter {
     const view = (t) => {
       const kids = (children.get(t.id) || []).sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0)).map(view);
       const subtree = kids.reduce((acc, k) => addUsage(acc, k.subtreeUsage), t.usage);
+      // Cost is priced from the per-model deltas (a thread may switch models),
+      // not from the last model seen. `cost` is null when nothing in this
+      // thread is priced, and `costPriced` is false when only part of it is.
+      const byModel = Object.fromEntries(
+        Object.entries(t.byModel).map(([m, u]) => {
+          const est = estimateCost(u, m, this.pricing.table);
+          return [m, { ...u, cost: est ? est.cost : null, priced: !!est }];
+        }),
+      );
+      const own = estimateCostByModel(t.byModel, this.pricing.table);
+      const cost = !own.any ? 0 : own.pricedCount ? own.cost : null;
+      const anyPricedInSubtree = cost !== null || kids.some((k) => k.subtreeCost !== null);
+      const subtreeCost = anyPricedInSubtree ? kids.reduce((acc, k) => acc + (k.subtreeCost || 0), cost || 0) : null;
+      const subtreeCostPriced = own.priced && kids.every((k) => k.subtreeCostPriced);
       const lastActive = Math.max(t.updatedAt || 0, ...kids.map((k) => k.lastActive));
       return {
         id: t.id,
@@ -333,13 +350,17 @@ export class RolloutStore extends EventEmitter {
         compacted: !!t.compacted,
         usage: t.usage,
         last: t.last,
-        byModel: t.byModel,
+        byModel,
+        cost,
+        costPriced: own.priced,
         requests: t.requests,
         startedAt: t.startedAt,
         updatedAt: t.updatedAt,
         lastActive,
         history: t.history,
         subtreeUsage: subtree,
+        subtreeCost,
+        subtreeCostPriced,
         children: kids,
       };
     };
@@ -356,6 +377,53 @@ export class RolloutStore extends EventEmitter {
       n.children.forEach((c) => walk(c, true));
     };
     allRoots.forEach((r) => walk(r, r.source.startsWith('subagent')));
-    return { version: this.version, generatedAt: Date.now(), codexHome: this.codexHome, sessions: allRoots.slice(0, limit), totals };
+    // Cost totals are priced from the aggregated per-model usage, so a model
+    // used by several threads is priced once, on its combined usage.
+    let allPriced = true;
+    let anyPriced = false;
+    for (const [m, u] of Object.entries(totals.byModel)) {
+      const est = estimateCost(u, m, this.pricing.table);
+      totals.byModel[m] = { ...u, cost: est ? est.cost : null, priced: !!est };
+      if (u.total > 0) {
+        if (est) anyPriced = true;
+        else allPriced = false;
+      }
+    }
+    const sumCost = (byModel) => Object.values(byModel).reduce((a, u) => a + (u.cost || 0), 0);
+    totals.all = { ...totals.all, cost: anyPriced ? sumCost(totals.byModel) : null, priced: allPriced };
+    // Sub-agent cost: aggregate per-model usage over sub-agent nodes only
+    // (depth > 0, or a root whose source is a sub-agent spawn), then price it.
+    const subByModel = {};
+    const collectSub = (n) => {
+      if (n.depth > 0 || n.source.startsWith('subagent')) {
+        for (const [m, u] of Object.entries(n.byModel)) subByModel[m] = addUsage(subByModel[m] || emptyUsage(), u);
+      }
+      n.children.forEach(collectSub);
+    };
+    allRoots.forEach(collectSub);
+    let subPriced = true;
+    let subAnyPriced = false;
+    let subCost = 0;
+    for (const [m, u] of Object.entries(subByModel)) {
+      const est = estimateCost(u, m, this.pricing.table);
+      if (u.total > 0) {
+        if (est) {
+          subAnyPriced = true;
+          subCost += est.cost;
+        } else subPriced = false;
+      }
+    }
+    totals.subagents = { ...totals.subagents, cost: subAnyPriced ? subCost : null, priced: subPriced };
+    totals.cost = totals.all.cost;
+    totals.costPriced = allPriced;
+    totals.currency = PRICING_CURRENCY;
+    return {
+      version: this.version,
+      generatedAt: Date.now(),
+      codexHome: this.codexHome,
+      pricing: { date: this.pricing.date, source: this.pricing.source, currency: PRICING_CURRENCY },
+      sessions: allRoots.slice(0, limit),
+      totals,
+    };
   }
 }

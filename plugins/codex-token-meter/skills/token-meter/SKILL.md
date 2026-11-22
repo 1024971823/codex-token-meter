@@ -17,6 +17,13 @@ and reports per-agent token usage. The CLI lives next to this skill at
    `model`, `status`, `usage` (`input`, `cached`, `output`, `reasoning`, `total`), `requests`, and
    `children` (its sub-agents). `totals.subagents` is the sum over all sub-agents, `totals.byModel`
    groups usage per model.
+   Each node also carries an estimated USD cost: `cost` (number, or `null` when its model is
+   unpriced — never report $0 for an unpriced model), `costPriced` (false when only part of the
+   node is priced), `subtreeCost` / `subtreeCostPriced` for the whole session tree, and
+   `totals.cost` / `totals.byModel[<model>].cost`. `snapshot.pricing` gives the pricing date and
+   source. Costs are estimates from OpenAI list prices, not a bill; say so when reporting them.
+   Custom pricing can be supplied with `--pricing-file <file>` or the
+   `CODEX_TOKEN_METER_PRICING` env var (JSON); see README “费用估算”.
 3. The current session is normally the first entry in `sessions`. Report the sub-agents of that
    session as a short table: agent, role, model, input, output, total.
 

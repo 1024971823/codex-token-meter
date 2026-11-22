@@ -29,7 +29,7 @@
   .session-head .title { font-weight:600; }
   .session-head .meta { color:var(--dim); font-size:12px; }
   table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; table-layout:fixed; }
-  th:nth-child(1) { width:17%; } th:nth-child(2) { width:7%; } th:nth-child(3) { width:13%; } th:nth-child(4) { width:6%; } th:nth-child(13) { width:8%; }
+  th:nth-child(1) { width:16%; } th:nth-child(2) { width:7%; } th:nth-child(3) { width:12%; } th:nth-child(4) { width:6%; } th:nth-child(14) { width:7%; }
   th, td { padding:7px 10px; text-align:right; white-space:nowrap; border-bottom:1px solid #21262d; }
   th { color:var(--dim); font-weight:500; font-size:12px; background:#11161d; }
   th:nth-child(-n+4), td:nth-child(-n+4) { text-align:left; }
@@ -91,10 +91,13 @@
   <div class="cards" id="cards"></div>
   <div class="models" id="models"></div>
   <div id="sessions"></div>
+  <div class="foot" id="pricingNote"></div>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => { n = n || 0; if (n >= 1e9) return (n/1e9).toFixed(2)+'B'; if (n >= 1e6) return (n/1e6).toFixed(2)+'M'; if (n >= 1e4) return (n/1e3).toFixed(1)+'k'; return n.toLocaleString('en-US'); };
+const fmtCost = (c) => { if (c === null || c === undefined || Number.isNaN(c)) return '—'; if (c === 0) return '$0.00'; if (c < 0.01) return '$' + c.toFixed(4); if (c < 1) return '$' + c.toFixed(3); return '$' + c.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+const costCell = (c, priced) => (c === null || c === undefined ? '—' : priced ? fmtCost(c) : '~' + fmtCost(c));
 const ago = (ts) => { if (!ts) return '-'; const s = Math.max(0, Math.round((Date.now()-ts)/1000)); return s<60?s+'s':s<3600?Math.floor(s/60)+'m':s<86400?Math.floor(s/3600)+'h':Math.floor(s/86400)+'d'; };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
 const STATUS = { running:'● 运行中', done:'✓ 完成', aborted:'■ 中断', error:'✗ 错误', idle:'○ 空闲' };
@@ -124,6 +127,7 @@ function row(n, prefix) {
     <td class="st ${n.status}">${STATUS[n.status] || esc(n.status)}${n.compacted ? ' <span class="id" title="发生过上下文压缩">⤺</span>' : ''}</td>
     <td>${fmt(n.usage.input)}</td><td>${fmt(n.usage.cached)}</td><td>${fmt(n.usage.output)}</td><td>${fmt(n.usage.reasoning)}</td>
     <td class="total">${fmt(n.usage.total)}</td>
+    <td class="total">${costCell(n.cost, n.costPriced)}</td>
     <td class="delta">${n.last.total ? '+' + fmt(n.last.total) : '-'}</td>
     <td>${n.requests}</td>
     <td>${ctxPct === null ? '-' : ctxPct + '%<span class="bar"><i class="' + (n.status === 'running' ? 'working' : '') + '" style="width:' + ctxPct + '%"></i></span>'}</td>
@@ -153,12 +157,16 @@ function render() {
   const sub = T.subagents;
   $('cards').innerHTML =
     card('全部 Token', fmt(T.all.total), `输入 ${fmt(T.all.input)} · 输出 ${fmt(T.all.output)}`) +
+    card('费用约 (USD)', costCell(T.cost, T.costPriced), T.costPriced ? '按 OpenAI 定价估算' : '部分模型未定价') +
     card('子代理 Token', `<span style="color:var(--cyan)">${fmt(sub.total)}</span>`, T.all.total ? `占 ${Math.round(sub.total / T.all.total * 100)}%` : '') +
     card('输入', fmt(T.all.input), `其中缓存 ${fmt(T.all.cached)}`) +
     card('输出', fmt(T.all.output), `其中推理 ${fmt(T.all.reasoning)}`) +
-    card('子代理 输入 / 输出', `${fmt(sub.input)} / ${fmt(sub.output)}`, `缓存 ${fmt(sub.cached)} · 推理 ${fmt(sub.reasoning)}`);
+    card('子代理 输入 / 输出', `${fmt(sub.input)} / ${fmt(sub.output)}`, `缓存 ${fmt(sub.cached)} · 推理 ${fmt(sub.reasoning)} · 费用约 ${costCell(sub.cost, sub.priced)}`);
   $('models').innerHTML = Object.entries(T.byModel).sort((a, b) => b[1].total - a[1].total)
-    .map(([m, u]) => `<span class="chip"><b>${esc(m)}</b>${fmt(u.total)} <span class="id">in ${fmt(u.input)} / out ${fmt(u.output)}</span></span>`).join('');
+    .map(([m, u]) => `<span class="chip"><b>${esc(m)}</b>${fmt(u.total)} <span class="id">in ${fmt(u.input)} / out ${fmt(u.output)} · ${costCell(u.cost, u.priced)}</span></span>`).join('');
+  $('pricingNote').textContent = state.pricing
+    ? `费用为估算 (OpenAI 定价 ${state.pricing.date}，以 https://platform.openai.com/docs/pricing 为准)，不是账单；“~”表示部分模型未定价。`
+    : '';
 
   let sessions = state.sessions;
   const mins = Number($('activeWindow').value);
@@ -173,9 +181,9 @@ function render() {
     return `<div class="session">
       <div class="session-head"><span class="title">${esc(s.cwd || s.id)}</span>
         <span class="meta">会话 ${esc(s.id)} · ${esc(s.source)} · 开始于 ${s.startedAt ? new Date(s.startedAt).toLocaleString() : '-'}</span></div>
-      <table><thead><tr><th>Agent</th><th>角色</th><th>模型</th><th>状态</th><th>输入</th><th>缓存</th><th>输出</th><th>推理</th><th>总计</th><th>本次</th><th>请求</th><th>上下文</th><th>趋势</th><th>更新</th></tr></thead>
+      <table><thead><tr><th>Agent</th><th>角色</th><th>模型</th><th>状态</th><th>输入</th><th>缓存</th><th>输出</th><th>推理</th><th>总计</th><th>费用</th><th>本次</th><th>请求</th><th>上下文</th><th>趋势</th><th>更新</th></tr></thead>
       <tbody>${rows(s, '', '')}</tbody></table>
-      ${s.children.length ? `<div class="foot">${count(s)} 个子代理共 ${fmt(subTotal)} tokens · 会话合计 ${fmt(s.subtreeUsage.total)} tokens</div>` : ''}
+      ${s.children.length ? `<div class="foot">${count(s)} 个子代理共 ${fmt(subTotal)} tokens · 会话合计 ${fmt(s.subtreeUsage.total)} tokens · 费用约 ${costCell(s.subtreeCost, s.subtreeCostPriced)}</div>` : `<div class="foot">会话费用约 ${costCell(s.subtreeCost, s.subtreeCostPriced)}</div>`}
     </div>`;
   }).join('');
 }
