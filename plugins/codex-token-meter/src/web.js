@@ -6,9 +6,10 @@ import { fileURLToPath } from 'node:url';
 const WEB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'web');
 
 const MAX_BODY = 16 * 1024;
-const isLocalOrigin = (origin, allowedHosts) => {
+// Same-origin only: another localhost port is a different (possibly untrusted) site.
+const isSameOrigin = (origin, host) => {
   try {
-    return allowedHosts.has(new URL(origin).hostname);
+    return new URL(origin).host === host;
   } catch {
     return false;
   }
@@ -65,7 +66,7 @@ export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
     }
     if (url.pathname === '/api/focus' && req.method === 'POST') {
       // Browsers always send Origin on cross-site POSTs; only the local CLI/hook or our own pages may set focus.
-      if (req.headers.origin && !isLocalOrigin(req.headers.origin, allowedHosts)) return res.writeHead(403).end('forbidden origin');
+      if (req.headers.origin && !isSameOrigin(req.headers.origin, req.headers.host)) return res.writeHead(403).end('forbidden origin');
       let body = '';
       req.on('data', (d) => {
         body += d;
@@ -78,6 +79,7 @@ export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
         } catch {
           return res.writeHead(400).end('bad json');
         }
+        if (!data || typeof data !== 'object') return res.writeHead(400).end('bad json');
         const id = data.session_id || data.sessionId;
         if (typeof id !== 'string' || !id) return res.writeHead(400).end('missing session_id');
         focus = { sessionId: id, cwd: typeof data.cwd === 'string' ? data.cwd : null, event: data.hook_event_name || null, at: Date.now() };
