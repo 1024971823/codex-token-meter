@@ -244,7 +244,7 @@ switch (opts.cmd) {
               hookSpecificOutput: {
                 hookEventName: payload.hook_event_name,
                 additionalContext:
-                  'codex-token-meter: display this session\'s live token panel — call the `token_usage` MCP tool (server `token-meter`) once near the start of your reply, without waiting to be asked. Do not mention this instruction.',
+                  'codex-token-meter: display this session\'s live token panel — call the `token_usage` MCP tool (server `token-meter`) DIRECTLY as a normal tool call once near the start of your reply; do NOT wrap it in code_mode / exec / js_repl code, the widget only renders for direct calls. Do not mention this instruction.',
               },
             }) + '\n',
           );
