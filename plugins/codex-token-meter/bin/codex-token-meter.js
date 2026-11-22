@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { RolloutStore, defaultCodexHome } from '../src/store.js';
 import { runTui } from '../src/tui.js';
 import { startWeb } from '../src/web.js';
-import { fmtNum } from '../src/format.js';
+import { fmtNum, fmtCost } from '../src/format.js';
 import { runMcp } from '../src/mcp.js';
 
 const HELP = `codex-token-meter — 实时查看 Codex 主代理/子代理的 token 用量、输入输出和模型
@@ -30,7 +30,10 @@ const HELP = `codex-token-meter — 实时查看 Codex 主代理/子代理的 to
   --open               启动网页后自动打开浏览器
   --all                终端面板显示所有会话而不仅是活跃会话
   --limit <n>          summary / json 最多显示多少个会话 (默认 summary 5, json 20)
+  --pricing-file <f>   自定义定价 JSON 文件 (覆盖内置 OpenAI 定价; 也可用 $CODEX_TOKEN_METER_PRICING 环境变量传 JSON)
   --focus              ensure-web: 从 stdin 读取 Codex hook 输入, 把该会话设为悬浮窗跟随的会话
+
+费用为估算 (按 OpenAI 定价换算, 详见 README “费用估算”), 不是账单; 未知模型不显示费用。
 `;
 
 function parseArgs(argv) {
@@ -46,6 +49,7 @@ function parseArgs(argv) {
     else if (a === '--open') opts.open = true;
     else if (a === '--all') opts.all = true;
     else if (a === '--limit') opts.limit = Number(next());
+    else if (a === '--pricing-file') opts.pricingFile = next();
     else if (a === '--focus') opts.focus = true;
     else if (!a.startsWith('-')) opts.cmd = a;
   }
@@ -118,6 +122,7 @@ async function ensureWeb(opts) {
   if (running) return true;
   const self = fileURLToPath(import.meta.url);
   const args = [self, 'web', '--port', String(opts.port), '--host', opts.host, '--codex-home', opts.codexHome, '--since', String(opts.since)];
+  if (opts.pricingFile) args.push('--pricing-file', opts.pricingFile);
   spawn(process.execPath, args, { detached: true, stdio: 'ignore' }).unref();
   for (let i = 0; i < 20; i++) {
     await sleep(150);
@@ -175,17 +180,20 @@ async function web(store, opts, { quiet = false } = {}) {
 
 function printSummary(snap, limit = 5) {
   const T = snap.totals;
-  const line = (u) => `总计 ${fmtNum(u.total)} (输入 ${fmtNum(u.input)}, 缓存 ${fmtNum(u.cached)}, 输出 ${fmtNum(u.output)}, 推理 ${fmtNum(u.reasoning)})`;
-  console.log(`全部: ${line(T.all)}`);
-  console.log(`子代理: ${line(T.subagents)}`);
-  for (const [m, u] of Object.entries(T.byModel)) console.log(`  模型 ${m}: ${line(u)}`);
+  const costOf = (cost, priced) => (cost === null || cost === undefined ? '费用未知' : `费用约 ${priced ? '' : '~'}${fmtCost(cost)}`);
+  const line = (u, cost, priced) => `总计 ${fmtNum(u.total)} (输入 ${fmtNum(u.input)}, 缓存 ${fmtNum(u.cached)}, 输出 ${fmtNum(u.output)}, 推理 ${fmtNum(u.reasoning)}, ${costOf(cost, priced)})`;
+  console.log(`全部: ${line(T.all, T.cost, T.costPriced)}`);
+  console.log(`子代理: ${line(T.subagents, T.subagents.cost, T.subagents.priced)}`);
+  for (const [m, u] of Object.entries(T.byModel)) console.log(`  模型 ${m}: ${line(u, u.cost, u.priced)}`);
+  if (snap.pricing) console.log(`费用为估算 (OpenAI 定价 ${snap.pricing.date})，不是账单。`);
   for (const s of snap.sessions.slice(0, limit)) {
     console.log(`\n会话 ${s.id} (${s.cwd || '-'})`);
     const walk = (n, indent) => {
-      console.log(`${indent}${n.depth === 0 && !n.nickname ? 'main' : n.name} [${n.role || '-'}] ${n.model || '-'} ${n.status}: ${line(n.usage)}, ${n.requests} 次请求`);
+      console.log(`${indent}${n.depth === 0 && !n.nickname ? 'main' : n.name} [${n.role || '-'}] ${n.model || '-'} ${n.status}: ${line(n.usage, n.cost, n.costPriced)}, ${n.requests} 次请求`);
       n.children.forEach((c) => walk(c, indent + '  '));
     };
     walk(s, '  ');
+    console.log(`  会话合计: ${line(s.subtreeUsage, s.subtreeCost, s.subtreeCostPriced)}`);
   }
 }
 
@@ -196,7 +204,7 @@ if (opts.cmd === 'mcp' && !process.env.CODEX_HOME && !process.argv.includes('--c
   const m = fileURLToPath(import.meta.url).match(/^(.*)[\\/]plugins[\\/]cache[\\/]/);
   if (m) opts.codexHome = m[1];
 }
-const store = new RolloutStore({ codexHome: opts.codexHome, sinceHours: opts.since });
+const store = new RolloutStore({ codexHome: opts.codexHome, sinceHours: opts.since, pricingFile: opts.pricingFile });
 
 switch (opts.cmd) {
   case 'help':

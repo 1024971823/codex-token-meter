@@ -1,3 +1,12 @@
+/** Formats a USD cost, or '—' when the model is unpriced (never '$0.00' for unknown). */
+export function fmtCost(cost) {
+  if (cost === null || cost === undefined || Number.isNaN(cost)) return '—';
+  if (cost === 0) return '$0.00';
+  if (cost < 0.01) return '$' + cost.toFixed(4);
+  if (cost < 1) return '$' + cost.toFixed(3);
+  return '$' + cost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 export function fmtNum(n) {
   n = n || 0;
   if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';

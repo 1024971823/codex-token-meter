@@ -2,7 +2,7 @@
 // entrypoint so the Codex CLI footer shows the displayed thread's token usage, and a read-only
 // `token_usage` tool for the model.
 import readline from 'node:readline';
-import { fmtNum } from './format.js';
+import { fmtNum, fmtCost } from './format.js';
 import { findSession, countAgents, isRunning } from './session.js';
 
 export const STATUSLINE_URI = 'ui://codex-token-meter/statusline';
@@ -12,7 +12,7 @@ const TOOL = {
   name: 'token_usage',
   title: 'Token Meter',
   description:
-    'Token usage of a Codex session and its sub-agents: input / cached / output / reasoning / total tokens and model per agent. Defaults to the current session.',
+    'Token usage of a Codex session and its sub-agents: input / cached / output / reasoning / total tokens and model per agent, plus an estimated USD cost per agent (OpenAI list prices; unknown models show no cost, never $0). Defaults to the current session.',
   inputSchema: {
     type: 'object',
     properties: { session_id: { type: 'string', description: 'Codex thread/session id (optional).' } },
@@ -37,9 +37,11 @@ export function statuslineTree(snapshot, threadId) {
     return null;
   })(s) || s;
   const u = self.usage;
+  const costOf = (node) => (node.cost === null ? '—' : node.costPriced ? fmtCost(node.cost) : `~${fmtCost(node.cost)}`);
   const items = [
     text([`⛁ ${fmtNum(u.total)}`], { color: isRunning(self) ? 'green' : 'cyan', weight: 'bold' }),
     text([`in ${fmtNum(u.input)} (缓存 ${fmtNum(u.cached)}) · out ${fmtNum(u.output)} (推理 ${fmtNum(u.reasoning)})`]),
+    text([`约 ${costOf(self)}`], { color: 'yellow' }),
   ];
   if (self.last.total) items.push(text([`本次 +${fmtNum(self.last.total)}`], { color: 'green' }));
   if (self.model) items.push(text([self.model], { color: 'yellow' }));
@@ -48,7 +50,7 @@ export function statuslineTree(snapshot, threadId) {
     const sub = s.subtreeUsage.total - s.usage.total;
     const running = (function walk(x) { return x.children.reduce((a, c) => a + (c.status === 'running' ? 1 : 0) + walk(c), 0); })(s);
     items.push(text([`子代理 ${n}${running ? `(${running} 运行中)` : ''} ${fmtNum(sub)}`], { color: 'cyan' }));
-    items.push(text([`会话合计 ${fmtNum(s.subtreeUsage.total)}`], { weight: 'bold' }));
+    items.push(text([`会话合计 ${fmtNum(s.subtreeUsage.total)} · 约 ${s.subtreeCost === null ? '—' : s.subtreeCostPriced ? fmtCost(s.subtreeCost) : `~${fmtCost(s.subtreeCost)}`}`], { weight: 'bold' }));
   }
   return { type: 'row', props: { gap: 2 }, children: items };
 }
@@ -56,14 +58,17 @@ export function statuslineTree(snapshot, threadId) {
 export function usageReport(snapshot, threadId) {
   const s = threadId ? findSession(snapshot, threadId) : snapshot.sessions[0];
   if (!s) return threadId ? `No token usage recorded for Codex session ${threadId} (yet).` : 'No Codex sessions found.';
-  const line = (u) => `total ${u.total} (input ${u.input}, cached ${u.cached}, output ${u.output}, reasoning ${u.reasoning})`;
+  const line = (u, cost, priced) =>
+    `total ${u.total} (input ${u.input}, cached ${u.cached}, output ${u.output}, reasoning ${u.reasoning})` +
+    (cost === null ? ', cost: unknown model (not priced)' : `, estimated cost ${priced ? '' : '~'}${fmtCost(cost)} USD`);
   const out = [`Session ${s.id} (${s.cwd || '-'})`];
   const walk = (n, indent) => {
-    out.push(`${indent}${n.depth === 0 && !n.nickname ? 'main' : n.name} [${n.role || '-'}] ${n.model || '-'} ${n.status}: ${line(n.usage)}, ${n.requests} requests`);
+    out.push(`${indent}${n.depth === 0 && !n.nickname ? 'main' : n.name} [${n.role || '-'}] ${n.model || '-'} ${n.status}: ${line(n.usage, n.cost, n.costPriced)}, ${n.requests} requests`);
     n.children.forEach((c) => walk(c, indent + '  '));
   };
   walk(s, '  ');
-  out.push(`Session subtree: ${line(s.subtreeUsage)}`);
+  out.push(`Session subtree: ${line(s.subtreeUsage, s.subtreeCost, s.subtreeCostPriced)}`);
+  out.push('Costs are estimates from OpenAI list prices, not a bill. Unknown models are shown as unpriced, never $0.');
   return out.join('\n');
 }
 

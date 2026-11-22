@@ -1,4 +1,4 @@
-import { fmtNum, fmtAgo, sparkline } from './format.js';
+import { fmtNum, fmtAgo, fmtCost, sparkline } from './format.js';
 
 const ESC = '\x1b[';
 const c = {
@@ -51,7 +51,7 @@ export function runTui(store, { limit = 8, showAll = false } = {}) {
 
   const cols = [
     ['Agent', 26, 'l'], ['角色', 10, 'l'], ['模型', 18, 'l'], ['状态', 9, 'l'], ['输入', 9, 'r'], ['缓存', 9, 'r'],
-    ['输出', 8, 'r'], ['推理', 8, 'r'], ['总计', 9, 'r'], ['本次', 8, 'r'], ['请求', 5, 'r'], ['上下文', 7, 'r'], ['趋势', 12, 'l'], ['更新', 5, 'r'],
+    ['输出', 8, 'r'], ['推理', 8, 'r'], ['总计', 9, 'r'], ['费用', 8, 'r'], ['本次', 8, 'r'], ['请求', 5, 'r'], ['上下文', 7, 'r'], ['趋势', 12, 'l'], ['更新', 5, 'r'],
   ];
   const cell = (v, [, w, align]) => (align === 'r' ? padL(v, w) : padR(trunc(v, w), w));
 
@@ -64,7 +64,8 @@ export function runTui(store, { limit = 8, showAll = false } = {}) {
     const label = prefix + (n.depth === 0 && !n.nickname ? `${c.bold}main${c.reset} ${c.gray}${n.id.slice(-8)}${c.reset}` : `${c.cyan}${n.name}${c.reset}`);
     const vals = [
       label, n.role || '-', n.model || '-', STATUS[n.status] || n.status, fmtNum(n.usage.input), fmtNum(n.usage.cached),
-      fmtNum(n.usage.output), fmtNum(n.usage.reasoning), hi(fmtNum(n.usage.total)), hi(n.last.total ? '+' + fmtNum(n.last.total) : '-'),
+      fmtNum(n.usage.output), fmtNum(n.usage.reasoning), hi(fmtNum(n.usage.total)),
+      n.cost === null ? '—' : hi(n.costPriced ? fmtCost(n.cost) : '~' + fmtCost(n.cost)), hi(n.last.total ? '+' + fmtNum(n.last.total) : '-'),
       String(n.requests), ctx, `${c.magenta}${sparkline(n.history, 12)}${c.reset}`, fmtAgo(n.updatedAt, now),
     ];
     return vals.map((v, i) => cell(v, cols[i])).join(' ');
@@ -81,13 +82,17 @@ export function runTui(store, { limit = 8, showAll = false } = {}) {
 
     const lines = [];
     const T = snap.totals;
+    const totalCost = T.cost === null ? '—' : T.costPriced ? fmtCost(T.cost) : '~' + fmtCost(T.cost);
+    const subCost = T.subagents.cost === null ? '—' : T.subagents.priced ? fmtCost(T.subagents.cost) : '~' + fmtCost(T.subagents.cost);
     lines.push(`${c.bold}Codex Token Meter${c.reset}  ${c.gray}${snap.codexHome}${c.reset}`);
     lines.push(
       `全部: ${c.bold}${fmtNum(T.all.total)}${c.reset}  (输入 ${fmtNum(T.all.input)} / 缓存 ${fmtNum(T.all.cached)} / 输出 ${fmtNum(T.all.output)} / 推理 ${fmtNum(T.all.reasoning)})   ` +
-        `子代理: ${c.bold}${c.cyan}${fmtNum(T.subagents.total)}${c.reset}  (输入 ${fmtNum(T.subagents.input)} / 输出 ${fmtNum(T.subagents.output)})`,
+        `费用约 ${c.bold}${totalCost}${c.reset}   ` +
+        `子代理: ${c.bold}${c.cyan}${fmtNum(T.subagents.total)}${c.reset}  (输入 ${fmtNum(T.subagents.input)} / 输出 ${fmtNum(T.subagents.output)} / 费用约 ${subCost})`,
     );
     const models = Object.entries(T.byModel).sort((a, b) => b[1].total - a[1].total);
-    if (models.length) lines.push('按模型: ' + models.map(([m, u]) => `${c.yellow}${m}${c.reset} ${fmtNum(u.total)}`).join('  '));
+    if (models.length) lines.push('按模型: ' + models.map(([m, u]) => `${c.yellow}${m}${c.reset} ${fmtNum(u.total)} ${u.cost === null ? '—' : u.priced ? fmtCost(u.cost) : '~' + fmtCost(u.cost)}`).join('  '));
+    if (snap.pricing) lines.push(`${c.gray}费用为估算 (OpenAI 定价 ${snap.pricing.date}，${snap.pricing.source})，不是账单。${c.reset}`);
     lines.push('');
     lines.push(c.dim + cols.map((col) => cell(col[0], col)).join(' ') + c.reset);
     if (!sessions.length) lines.push(`${c.gray}  还没有会话。在另一个终端运行 codex，这里会实时显示。${c.reset}`);
@@ -102,7 +107,8 @@ export function runTui(store, { limit = 8, showAll = false } = {}) {
       walk(s.children, ' ');
       if (s.children.length) {
         const sub = s.subtreeUsage.total - s.usage.total;
-        lines.push(`${c.gray}  ${s.children.length} 个子代理共 ${fmtNum(sub)} tokens · 会话合计 ${fmtNum(s.subtreeUsage.total)}${c.reset}`);
+        const subCost = s.subtreeCost === null ? '—' : s.subtreeCostPriced ? fmtCost(s.subtreeCost) : '~' + fmtCost(s.subtreeCost);
+        lines.push(`${c.gray}  ${s.children.length} 个子代理共 ${fmtNum(sub)} tokens · 会话合计 ${fmtNum(s.subtreeUsage.total)} · 费用约 ${subCost}${c.reset}`);
       }
       lines.push('');
     }
