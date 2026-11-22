@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import http from 'node:http';
+import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +8,7 @@ import { RolloutStore, defaultCodexHome } from '../src/store.js';
 import { runTui } from '../src/tui.js';
 import { startWeb } from '../src/web.js';
 import { fmtNum } from '../src/format.js';
+import { runMcp } from '../src/mcp.js';
 
 const HELP = `codex-token-meter — 实时查看 Codex 主代理/子代理的 token 用量、输入输出和模型
 
@@ -16,7 +18,9 @@ const HELP = `codex-token-meter — 实时查看 Codex 主代理/子代理的 to
   codex-token-meter both           同时启动网页仪表盘和终端面板
   codex-token-meter json           输出一次 JSON 快照 (给脚本 / Codex skill 用)
   codex-token-meter summary        输出一次文本摘要
+  codex-token-meter mini           打开悬浮小窗 (跟随当前 Codex 会话, 可置顶)
   codex-token-meter ensure-web     若仪表盘未运行则在后台启动 (插件 hook 使用)
+  codex-token-meter mcp            stdio MCP 服务 (Codex CLI 状态栏 + token_usage 工具, 插件使用)
 
 选项:
   --codex-home <dir>   Codex 数据目录 (默认 $CODEX_HOME 或 ~/.codex)
@@ -26,6 +30,7 @@ const HELP = `codex-token-meter — 实时查看 Codex 主代理/子代理的 to
   --open               启动网页后自动打开浏览器
   --all                终端面板显示所有会话而不仅是活跃会话
   --limit <n>          summary / json 最多显示多少个会话 (默认 summary 5, json 20)
+  --focus              ensure-web: 从 stdin 读取 Codex hook 输入, 把该会话设为悬浮窗跟随的会话
 `;
 
 function parseArgs(argv) {
@@ -41,6 +46,7 @@ function parseArgs(argv) {
     else if (a === '--open') opts.open = true;
     else if (a === '--all') opts.all = true;
     else if (a === '--limit') opts.limit = Number(next());
+    else if (a === '--focus') opts.focus = true;
     else if (!a.startsWith('-')) opts.cmd = a;
   }
   return opts;
@@ -70,6 +76,77 @@ function runningMeter(host, port) {
     req.on('error', () => resolve(null));
     req.on('timeout', () => { req.destroy(); resolve(null); });
   });
+}
+
+function readStdin(timeoutMs = 1000) {
+  if (process.stdin.isTTY) return Promise.resolve('');
+  return new Promise((resolve) => {
+    let data = '';
+    const done = () => resolve(data);
+    setTimeout(done, timeoutMs).unref();
+    process.stdin.on('data', (d) => (data += d));
+    process.stdin.on('end', done);
+    process.stdin.on('error', done);
+  });
+}
+
+function postFocus(host, port, payload) {
+  return new Promise((resolve) => {
+    const body = JSON.stringify(payload);
+    const req = http.request(
+      { host, port, path: '/api/focus', method: 'POST', timeout: 800, headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } },
+      (res) => {
+        res.resume();
+        resolve(res.statusCode === 204);
+      },
+    );
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.end(body);
+  });
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Starts the dashboard in the background unless one is already running; resolves when it answers. */
+async function ensureWeb(opts) {
+  const running = await runningMeter(opts.host, opts.port);
+  if (running && !sameHome(running, opts)) {
+    console.error(`端口 ${opts.port} 已被监控 ${running.codexHome} 的仪表盘占用，未为 ${opts.codexHome} 启动`);
+    return false;
+  }
+  if (running) return true;
+  const self = fileURLToPath(import.meta.url);
+  const args = [self, 'web', '--port', String(opts.port), '--host', opts.host, '--codex-home', opts.codexHome, '--since', String(opts.since)];
+  spawn(process.execPath, args, { detached: true, stdio: 'ignore' }).unref();
+  for (let i = 0; i < 20; i++) {
+    await sleep(150);
+    if (await runningMeter(opts.host, opts.port)) return true;
+  }
+  return false;
+}
+
+function findBrowser() {
+  const candidates =
+    process.platform === 'win32'
+      ? [
+          `${process.env['ProgramFiles(x86)']}\\Microsoft\\Edge\\Application\\msedge.exe`,
+          `${process.env.ProgramFiles}\\Microsoft\\Edge\\Application\\msedge.exe`,
+          `${process.env.ProgramFiles}\\Google\\Chrome\\Application\\chrome.exe`,
+          `${process.env['ProgramFiles(x86)']}\\Google\\Chrome\\Application\\chrome.exe`,
+          `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
+        ]
+      : process.platform === 'darwin'
+        ? ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge']
+        : ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/microsoft-edge'];
+  return candidates.find((p) => p && !p.includes('undefined') && fs.existsSync(p));
+}
+
+/** Opens the mini window as a small chromeless Chrome/Edge app window, falling back to the default browser. */
+function openMini(url) {
+  const browser = findBrowser();
+  if (!browser) return openBrowser(url);
+  spawn(browser, [`--app=${url}`, '--window-size=380,560', '--window-position=40,80'], { detached: true, stdio: 'ignore' }).unref();
 }
 
 const sameHome = (h, opts) => !h.codexHome || path.resolve(h.codexHome) === path.resolve(opts.codexHome);
@@ -113,6 +190,12 @@ function printSummary(snap, limit = 5) {
 }
 
 const opts = parseArgs(process.argv.slice(2));
+// Codex starts MCP servers with a minimal environment. If CODEX_HOME was not forwarded, an installed
+// plugin lives at <codex home>/plugins/cache/<marketplace>/<plugin>/<version>, so derive it from there.
+if (opts.cmd === 'mcp' && !process.env.CODEX_HOME && !process.argv.includes('--codex-home')) {
+  const m = fileURLToPath(import.meta.url).match(/^(.*)[\\/]plugins[\\/]cache[\\/]/);
+  if (m) opts.codexHome = m[1];
+}
 const store = new RolloutStore({ codexHome: opts.codexHome, sinceHours: opts.since });
 
 switch (opts.cmd) {
@@ -138,22 +221,27 @@ switch (opts.cmd) {
     runTui(store, { showAll: opts.all });
     break;
   case 'ensure-web': {
-    const running = await runningMeter(opts.host, opts.port);
-    if (running && !sameHome(running, opts)) {
-      console.error(`端口 ${opts.port} 已被监控 ${running.codexHome} 的仪表盘占用，未为 ${opts.codexHome} 启动`);
-      break;
-    }
-    if (!running) {
-      const self = fileURLToPath(import.meta.url);
-      const args = [self, 'web', '--port', String(opts.port), '--host', opts.host, '--codex-home', opts.codexHome, '--since', String(opts.since)];
-      const child = spawn(process.execPath, args, {
-        detached: true,
-        stdio: 'ignore',
-      });
-      child.unref();
+    const input = opts.focus ? await readStdin() : '';
+    const ok = await ensureWeb(opts);
+    if (ok && input.trim()) {
+      try {
+        await postFocus(opts.host, opts.port, JSON.parse(input));
+      } catch {}
     }
     break;
   }
+  case 'mini': {
+    if (await ensureWeb(opts)) {
+      const url = `http://${opts.host === '0.0.0.0' ? '127.0.0.1' : opts.host}:${opts.port}/mini`;
+      openMini(url);
+      console.error(`悬浮窗: ${url}  (在窗口里点 📌 置顶)`);
+    }
+    break;
+  }
+  case 'mcp':
+    store.start();
+    runMcp(store);
+    break;
   case 'tui':
     store.start();
     runTui(store, { showAll: opts.all });

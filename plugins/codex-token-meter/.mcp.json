@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "token-meter": {
+      "command": "node",
+      "args": [
+        "bin/codex-token-meter.js",
+        "mcp"
+      ],
+      "cwd": ".",
+      "env_vars": [
+        "CODEX_HOME"
+      ]
+    }
+  }
+}

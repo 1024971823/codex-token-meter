@@ -1,9 +1,13 @@
 # Codex Token Meter
 
-实时查看 Codex 主 agent 和每个子 agent 的 token 用量：输入、缓存输入、输出、推理 token、所用模型、每次请求增量和趋势。提供两种界面：
+实时查看 Codex 主 agent 和每个子 agent 的 token 用量：输入、缓存输入、输出、推理 token、所用模型、每次请求增量和趋势。提供四种界面：
 
+- **悬浮小窗**：约 360×480 的小页面，可置顶浮在 Codex 桌面版 / IDE / 终端上方，**自动跟随你正在使用的 Codex 会话**。
+- **Codex CLI 状态栏**：直接显示在 Codex 终端底部，跟随当前线程（Codex 0.171+ 实验功能）。
 - **终端 TUI**：在另一个终端里运行，按 agent 树实时刷新。
 - **网页仪表盘**：`http://127.0.0.1:4399`，通过 SSE 实时推送。
+
+<img src="docs/mini-window.png" width="320" alt="悬浮小窗">
 
 不需要 API key，也不依赖第三方 npm 包（Node >= 18）。
 
@@ -39,7 +43,9 @@ node plugins/codex-token-meter/bin/codex-token-meter.js both     # 同时启动�
 | `both` | TUI + 网页 |
 | `summary` | 打印一次文字摘要 |
 | `json` | 打印完整 JSON 快照 |
-| `ensure-web` | 若网页服务未运行，则在后台启动（供 hook 使用） |
+| `mini` | 打开悬浮小窗（Chrome/Edge 无边框小窗口，地址 `http://127.0.0.1:4399/mini`） |
+| `ensure-web` | 若网页服务未运行，则在后台启动（供 hook 使用）；`--focus` 时从 stdin 读取 hook 输入并切换悬浮窗跟随的会话 |
+| `mcp` | stdio MCP 服务：Codex 状态栏 + `token_usage` 工具（插件自动启动） |
 
 选项：`--codex-home <dir>`、`--port <n>`（默认 4399）、`--host <addr>`（默认 127.0.0.1）、`--since <小时>`（默认 24）、`--open`、`--all`。
 
@@ -52,8 +58,35 @@ codex plugin add codex-token-meter@codex-token-meter
 
 插件提供：
 
-- **SessionStart hook**：每次启动 Codex 时自动确保网页仪表盘在后台运行。Codex 要求首次审核插件 hook；在交互式 Codex 启动时的 hook 审核界面里信任它即可（`codex exec` 下未信任的 hook 不会运行）。
+- **SessionStart / UserPromptSubmit hook**：启动 Codex 时自动在后台运行仪表盘；每次你在某个会话里发消息，都会把该会话设为悬浮窗的“当前会话”。Codex 要求首次审核插件 hook；在交互式 Codex 启动时的 hook 审核界面里信任它即可（`codex exec` 下未信任的 hook 不会运行）。
+- **MCP 服务 `token-meter`**：提供 Codex CLI 状态栏和 `token_usage` 工具（模型可直接查询当前会话的 token）。
 - **`token-meter` skill**：在 Codex 里问“子 agent 用了多少 token”时，Codex 会调用 `summary` / `json` 回答并给出仪表盘地址。
+
+### 悬浮小窗
+
+```bash
+node plugins/codex-token-meter/bin/codex-token-meter.js mini
+```
+
+或在网页仪表盘右上角点“悬浮窗”，或直接打开 `http://127.0.0.1:4399/mini`。
+
+- 下拉框默认“自动跟随当前 Codex 会话”：在哪个 Codex 窗口/会话里发消息，小窗就切到哪个会话；也可以选中某个会话固定显示。
+- 点“置顶”会弹出画中画窗口（Document Picture-in-Picture，Chrome / Edge 116+），始终浮在 Codex 等其他窗口上方，可拖动、缩放；关闭画中画后回到普通页面。
+
+Codex 桌面版和 IDE 扩展目前没有给插件开放嵌入自定义页面的接口，所以用置顶悬浮窗代替嵌入。
+
+### Codex CLI 状态栏
+
+在 `~/.codex/config.toml` 中开启实验功能并选择本插件作为状态栏：
+
+```toml
+features.tui_extensions_statusline = true
+
+[tui]
+status_line_provider = { server = "token-meter", tool = "token_usage" }
+```
+
+重启 Codex 后底部会显示：当前线程的 total、输入（缓存）、输出（推理）、最近一次请求增量、模型，以及子代理数量、子代理合计和会话合计，每秒刷新，切换线程时自动跟随。也可以在 Codex 里用 `/statusline` 选择。
 
 ## 开发
 
