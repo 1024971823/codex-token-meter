@@ -54,8 +54,8 @@ export function statuslineTree(snapshot, threadId) {
 }
 
 export function usageReport(snapshot, threadId) {
-  const s = findSession(snapshot, threadId) || snapshot.sessions[0];
-  if (!s) return 'No Codex sessions found.';
+  const s = threadId ? findSession(snapshot, threadId) : snapshot.sessions[0];
+  if (!s) return threadId ? `No token usage recorded for Codex session ${threadId} (yet).` : 'No Codex sessions found.';
   const line = (u) => `total ${u.total} (input ${u.input}, cached ${u.cached}, output ${u.output}, reasoning ${u.reasoning})`;
   const out = [`Session ${s.id} (${s.cwd || '-'})`];
   const walk = (n, indent) => {
@@ -82,7 +82,8 @@ export function handleRequest(store, msg, env = process.env) {
       return { tools: [TOOL] };
     case 'tools/call': {
       if (p.name !== TOOL.name) throw rpcError(-32602, `unknown tool ${p.name}`);
-      const id = p.arguments?.session_id || env.CODEX_THREAD_ID;
+      // Codex sends the calling thread as _meta.threadId on every MCP tool call.
+      const id = p.arguments?.session_id || p._meta?.threadId || env.CODEX_THREAD_ID;
       return { content: [{ type: 'text', text: usageReport(store.snapshot({ limit: 1000 }), id) }] };
     }
     case 'resources/list':
