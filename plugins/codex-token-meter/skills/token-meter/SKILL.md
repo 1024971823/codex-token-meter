@@ -20,7 +20,14 @@ and reports per-agent token usage. The CLI lives next to this skill at
 3. The current session is normally the first entry in `sessions`. Report the sub-agents of that
    session as a short table: agent, role, model, input, output, total.
 
+If the `token-meter` MCP tool `token_usage` is available, prefer calling it: it returns the
+current session's per-agent usage directly.
+
 ## Opening the live dashboard
+
+- Floating mini window (follows the session the user is typing in, can stay on top of Codex):
+  run `node <plugin root>/bin/codex-token-meter.js mini`, or tell the user to open
+  http://127.0.0.1:4399/mini and click “置顶”.
 
 - Web dashboard: `node <plugin root>/bin/codex-token-meter.js ensure-web`, then tell the user to
   open http://127.0.0.1:4399 (the plugin's SessionStart hook normally starts it already).

@@ -85,6 +85,7 @@
     </select>
   </label>
   <span class="live" id="home"></span>
+  <button id="openMini" title="打开跟随当前 Codex 会话的悬浮小窗" style="background:var(--panel);color:var(--fg);border:1px solid var(--border);border-radius:6px;font-size:12px;padding:3px 10px;cursor:pointer">悬浮窗</button>
 </header>
 <main>
   <div class="cards" id="cards"></div>
@@ -190,6 +191,7 @@ winSel.value = localStorage.getItem('ctm.activeWindow') ?? '30';
 if (!winSel.value) winSel.value = '30';
 winSel.onchange = () => { localStorage.setItem('ctm.activeWindow', winSel.value); render(); };
 setInterval(() => { if (state) { prevTotals.clear(); state.sessions.forEach(function walk(n) { prevTotals.set(n.id, n.usage.total); n.children.forEach(walk); }); render(); } }, 5000);
+$('openMini').onclick = () => window.open('/mini', 'ctm-mini', 'popup,width=380,height=560');
 connect();
 </script>
 </body>

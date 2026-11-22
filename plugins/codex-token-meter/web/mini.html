@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Token Meter · 悬浮窗</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#e6edf3; --dim:#8b949e; --accent:#58a6ff; --green:#3fb950; --yellow:#d29922; --red:#f85149; --purple:#bc8cff; --cyan:#39c5cf; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; background:var(--bg); color:var(--fg); font:12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+  #app { padding:8px 10px; min-width:260px; }
+  .bar { display:flex; align-items:center; gap:6px; }
+  .dot { width:7px; height:7px; border-radius:50%; background:var(--red); flex:none; }
+  .dot.on { background:var(--green); box-shadow:0 0 5px var(--green); }
+  select { flex:1; min-width:0; background:var(--panel); color:var(--fg); border:1px solid var(--border); border-radius:5px; font-size:11px; padding:2px 4px; }
+  button { background:var(--panel); color:var(--fg); border:1px solid var(--border); border-radius:5px; font-size:11px; padding:2px 7px; cursor:pointer; white-space:nowrap; }
+  button:hover { border-color:var(--accent); }
+  .title { margin:8px 0 2px; display:flex; gap:6px; align-items:baseline; }
+  .title b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
+  .title .follow { color:var(--green); font-size:10px; border:1px solid var(--green); border-radius:999px; padding:0 6px; flex:none; }
+  .sub { color:var(--dim); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .big { display:flex; align-items:baseline; gap:8px; margin:6px 0 2px; }
+  .big .v { font-size:26px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .big .d { color:var(--green); font-variant-numeric:tabular-nums; }
+  .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:4px; margin:6px 0 8px; }
+  .grid > div { background:var(--panel); border:1px solid var(--border); border-radius:6px; padding:3px 5px; }
+  .grid .k { color:var(--dim); font-size:10px; }
+  .grid .n { font-weight:600; font-variant-numeric:tabular-nums; }
+  .agents { border:1px solid var(--border); border-radius:7px; overflow:hidden; }
+  .ag { display:grid; grid-template-columns:1fr auto auto; gap:2px 8px; padding:4px 7px; border-bottom:1px solid #21262d; font-variant-numeric:tabular-nums; }
+  .ag:last-child { border-bottom:none; }
+  .ag .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+  .ag.child .nm { color:var(--cyan); }
+  .ag .tree { color:var(--border); font-family:ui-monospace,monospace; font-weight:400; }
+  .ag .tot { font-weight:600; text-align:right; }
+  .ag .dl { color:var(--green); text-align:right; min-width:42px; }
+  .ag .meta { grid-column:1 / -1; color:var(--dim); font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ag .meta .m { color:var(--yellow); }
+  .ag .meta .r { color:var(--purple); }
+  .st { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--dim); margin-right:5px; vertical-align:middle; }
+  .st.running { background:var(--green); animation:pulse 1.2s ease-in-out infinite; }
+  .st.error { background:var(--red); } .st.aborted { background:var(--yellow); }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.3; } }
+  .flash { animation:flash 1.4s ease-out; }
+  @keyframes flash { 0% { background:rgba(63,185,80,.4); } 100% { background:transparent; } }
+  .foot { color:var(--dim); font-size:10px; margin-top:6px; display:flex; justify-content:space-between; gap:6px; }
+  .empty { color:var(--dim); text-align:center; padding:30px 0; }
+  .hint { color:var(--yellow); font-size:10px; margin-top:6px; }
+  @media (prefers-reduced-motion: reduce) { .st.running, .flash { animation:none; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="bar">
+    <span class="dot" id="dot" title="实时连接"></span>
+    <select id="pick" title="选择要显示的会话"></select>
+    <button id="pin" title="置顶悬浮在其他窗口 (Codex) 上方">置顶</button>
+  </div>
+  <div id="body"><div class="empty">连接中…</div></div>
+  <div class="hint" id="hint" hidden></div>
+</div>
+<script>
+// Look elements up through #app: it moves into the Picture-in-Picture document when pinned.
+const app = document.getElementById('app');
+const $ = (id) => app.querySelector('#' + id);
+const fmt = (n) => { n = n || 0; if (n >= 1e9) return (n/1e9).toFixed(2)+'B'; if (n >= 1e6) return (n/1e6).toFixed(2)+'M'; if (n >= 1e4) return (n/1e3).toFixed(1)+'k'; return n.toLocaleString('en-US'); };
+const ago = (ts) => { if (!ts) return '-'; const s = Math.max(0, Math.round((Date.now()-ts)/1000)); return s<60?s+'s':s<3600?Math.floor(s/60)+'m':s<86400?Math.floor(s/3600)+'h':Math.floor(s/86400)+'d'; };
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
+const base = (p) => (p || '').split(/[\\/]/).filter(Boolean).pop() || p || '';
+const contains = (n, id) => n.id === id || n.children.some((c) => contains(c, id));
+const prev = new Map();
+let state = null;
+let choice = localStorage.getItem('ctm.mini.session') || 'auto';
+
+function current() {
+  if (!state || !state.sessions.length) return { s: null, auto: false };
+  if (choice !== 'auto') {
+    const s = state.sessions.find((x) => x.id === choice);
+    if (s) return { s, auto: false };
+  }
+  const f = state.focus && state.sessions.find((x) => contains(x, state.focus.sessionId));
+  return { s: f || state.sessions[0], auto: true, followed: !!f };
+}
+
+function renderPicker() {
+  const pick = $('pick');
+  const listed = state.sessions.slice(0, 20);
+  const pinned = state.sessions.find((s) => s.id === choice);
+  if (pinned && !listed.includes(pinned)) listed.push(pinned);
+  const opts = [`<option value="auto">自动跟随当前 Codex 会话</option>`].concat(
+    listed.map((s) => `<option value="${esc(s.id)}">${esc(base(s.cwd) || s.id.slice(-8))} · ${esc(s.id.slice(-6))} · ${fmt(s.subtreeUsage.total)}</option>`));
+  const html = opts.join('');
+  if (pick.dataset.html !== html) { pick.innerHTML = html; pick.dataset.html = html; }
+  pick.value = state.sessions.some((s) => s.id === choice) ? choice : 'auto';
+}
+
+function agentRows(n, prefix, indent, out) {
+  const before = prev.get(n.id);
+  const changed = before !== undefined && before !== n.usage.total;
+  prev.set(n.id, n.usage.total);
+  const isMain = n.depth === 0 && !n.nickname;
+  const ctx = n.contextWindow ? ` · 上下文 ${Math.min(100, Math.round(n.contextUsed / n.contextWindow * 100))}%` : '';
+  out.push(`<div class="ag ${isMain ? '' : 'child'} ${changed ? 'flash' : ''}">
+    <span class="nm"><span class="tree">${prefix}</span><span class="st ${n.status}"></span>${esc(isMain ? 'main' : n.name)}</span>
+    <span class="dl">${n.last.total ? '+' + fmt(n.last.total) : ''}</span>
+    <span class="tot">${fmt(n.usage.total)}</span>
+    <span class="meta">${n.role ? `<span class="r">${esc(n.role)}</span> · ` : ''}<span class="m">${esc(n.model || '-')}</span> · in ${fmt(n.usage.input)} / out ${fmt(n.usage.output)} · ${n.requests} 次${ctx} · ${ago(n.updatedAt)}</span>
+  </div>`);
+  n.children.forEach((c, i) => {
+    const last = i === n.children.length - 1;
+    agentRows(c, indent + (last ? '└ ' : '├ '), indent + (last ? '  ' : '│ '), out);
+  });
+}
+
+function render() {
+  if (!state) return;
+  renderPicker();
+  const { s, auto, followed } = current();
+  if (!s) { $('body').innerHTML = '<div class="empty">还没有会话。在 Codex 里发一条消息后这里会实时显示。</div>'; return; }
+  const u = s.subtreeUsage;
+  let delta = 0;
+  (function walk(n) { delta += n.last.total || 0; n.children.forEach(walk); })(s);
+  const rows = [];
+  agentRows(s, '', '', rows);
+  const subCount = (function count(n) { return n.children.reduce((a, c) => a + 1 + count(c), 0); })(s);
+  $('body').innerHTML = `
+    <div class="title"><b title="${esc(s.cwd || '')}">${esc(base(s.cwd) || '会话')}</b>${auto && followed ? '<span class="follow">跟随中</span>' : ''}</div>
+    <div class="sub">会话 ${esc(s.id)}</div>
+    <div class="big"><span class="v">${fmt(u.total)}</span><span class="d">${delta ? '最近 +' + fmt(delta) : ''}</span></div>
+    <div class="grid">
+      <div><div class="k">输入</div><div class="n">${fmt(u.input)}</div></div>
+      <div><div class="k">缓存</div><div class="n">${fmt(u.cached)}</div></div>
+      <div><div class="k">输出</div><div class="n">${fmt(u.output)}</div></div>
+      <div><div class="k">推理</div><div class="n">${fmt(u.reasoning)}</div></div>
+    </div>
+    <div class="agents">${rows.join('')}</div>
+    <div class="foot"><span>${subCount ? `${subCount} 个子代理 ${fmt(u.total - s.usage.total)}` : '无子代理'}</span><span>${new Date().toLocaleTimeString()}</span></div>`;
+}
+
+$('pick').onchange = (e) => { choice = e.target.value; localStorage.setItem('ctm.mini.session', choice); render(); };
+
+// Document Picture-in-Picture keeps the mini view above every other window (Chrome / Edge 116+).
+let pip = null;
+$('pin').onclick = async () => {
+  if (pip) { pip.close(); return; }
+  if (!('documentPictureInPicture' in window)) {
+    $('hint').hidden = false;
+    $('hint').textContent = '当前浏览器不支持置顶悬浮窗，请用 Chrome 或 Edge 116+ 打开本页。';
+    return;
+  }
+  pip = await documentPictureInPicture.requestWindow({ width: 360, height: 480 });
+  document.querySelectorAll('style').forEach((st) => pip.document.head.appendChild(st.cloneNode(true)));
+  pip.document.title = document.title;
+  pip.document.body.appendChild(app);
+  $('pin').textContent = '取消置顶';
+  document.body.insertAdjacentHTML('beforeend', '<div class="empty" id="away">已置顶为悬浮窗，可以最小化本窗口。</div>');
+  pip.addEventListener('pagehide', () => {
+    document.body.prepend(app);
+    document.getElementById('away')?.remove();
+    $('pin').textContent = '置顶';
+    pip = null;
+  });
+};
+
+function connect() {
+  const es = new EventSource('/api/events');
+  es.onopen = () => $('dot').classList.add('on');
+  es.onmessage = (e) => { state = JSON.parse(e.data); render(); };
+  es.onerror = () => $('dot').classList.remove('on');
+}
+connect();
+</script>
+</body>
+</html>
