@@ -25,6 +25,13 @@ test('statusline tree shows the displayed thread and its sub-agents', () => {
   assert.match(JSON.stringify(statuslineTree(load().snapshot({ limit: 100 }), CHILD)), /18,345|18\.3k/);
 });
 
+test('token_usage uses the calling thread and never substitutes another session', () => {
+  const store = load();
+  const call = (params) => handleRequest(store, { method: 'tools/call', params: { name: 'token_usage', ...params } }, {}).content[0].text;
+  assert.match(call({ arguments: {}, _meta: { threadId: CHILD } }), new RegExp(`Session ${ROOT}`));
+  assert.match(call({ arguments: { session_id: 'nope' } }), /No token usage recorded for Codex session nope/);
+});
+
 test('MCP server advertises a statusline entrypoint and reads it for the requested thread', async () => {
   const store = load();
   const tools = handleRequest(store, { method: 'tools/list' }).tools;
@@ -82,8 +89,11 @@ test('web: /api/focus sets the followed session, rejects foreign origins, serves
   const post = (headers = {}) =>
     request(port, { method: 'POST', path: '/api/focus', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ session_id: CHILD, cwd: '/w', hook_event_name: 'UserPromptSubmit' }) });
   assert.equal((await post({ origin: 'https://evil.example' })).status, 403);
+  assert.equal((await post({ origin: 'http://127.0.0.1:1' })).status, 403);
+  assert.equal((await request(port, { method: 'POST', path: '/api/focus', body: 'null' })).status, 400);
   assert.equal(JSON.parse((await request(port, { path: '/api/state' })).data).focus, null);
   assert.equal((await post()).status, 204);
+  assert.equal((await post({ origin: `http://127.0.0.1:${port}` })).status, 204);
   const focus = JSON.parse((await request(port, { path: '/api/state' })).data).focus;
   assert.equal(focus.sessionId, CHILD);
   assert.equal(focus.event, 'UserPromptSubmit');
