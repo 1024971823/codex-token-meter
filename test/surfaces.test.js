@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { RolloutStore } from '../plugins/codex-token-meter/src/store.js';
 import { startWeb } from '../plugins/codex-token-meter/src/web.js';
-import { handleRequest, statuslineTree, STATUSLINE_URI } from '../plugins/codex-token-meter/src/mcp.js';
+import { handleRequest, statuslineTree, STATUSLINE_URI, WIDGET_URI } from '../plugins/codex-token-meter/src/mcp.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOME = path.join(HERE, 'fixtures');
@@ -36,6 +36,7 @@ test('MCP server advertises a statusline entrypoint and reads it for the request
   const store = load();
   const tools = handleRequest(store, { method: 'tools/list' }).tools;
   assert.deepEqual(tools[0]._meta['openai/ui'].entrypoints, [{ type: 'statusline', resourceUri: STATUSLINE_URI }]);
+  assert.equal(tools[0]._meta['openai/outputTemplate'], WIDGET_URI);
 
   const child = spawn(process.execPath, [BIN, 'mcp', '--codex-home', HOME, '--since', '1e7'], { stdio: ['pipe', 'pipe', 'inherit'] });
   const replies = [];
@@ -62,11 +63,18 @@ test('MCP server advertises a statusline entrypoint and reads it for the request
   send({ method: 'notifications/initialized' });
   send({ id: 2, method: 'resources/read', params: { uri: STATUSLINE_URI, _meta: { 'com.openai/codex-statusline-state': { thread: { id: ROOT } } } } });
   send({ id: 3, method: 'tools/call', params: { name: 'token_usage', arguments: { session_id: ROOT } } });
+  send({ id: 4, method: 'resources/read', params: { uri: WIDGET_URI } });
   assert.equal((await waitFor(1)).result.serverInfo.name, 'codex-token-meter');
   const read = (await waitFor(2)).result.contents[0];
   assert.equal(read.mimeType, 'application/json');
   assert.match(read.text, /会话合计 52\.1k/);
-  assert.match((await waitFor(3)).result.content[0].text, /Planck \[explorer\]/);
+  const call = (await waitFor(3)).result;
+  assert.match(call.content[0].text, /Planck \[explorer\]/);
+  assert.equal(call.structuredContent.session.id, ROOT);
+  const widget = (await waitFor(4)).result.contents[0];
+  assert.equal(widget.mimeType, 'text/html;profile=mcp-app');
+  assert.match(widget.text, /api\/state/);
+  assert.match(widget.text, new RegExp(ROOT));
   child.stdin.end();
   await new Promise((r) => child.on('exit', r));
 });

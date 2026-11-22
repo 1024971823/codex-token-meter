@@ -121,6 +121,10 @@ node plugins/codex-token-meter/bin/codex-token-meter.js mini
 
 Codex 桌面版和 IDE 扩展目前没有给插件开放嵌入自定义页面的接口，所以用置顶悬浮窗代替嵌入。
 
+### 桌面版内嵌小组件
+
+`token_usage` 工具带有 `openai/outputTemplate` 元数据（MCP App）。在 ChatGPT 桌面版 / Codex Desktop 里，当模型调用 `token_usage`（比如你问“现在用了多少 token”）时，会在会话中内嵌渲染一个实时面板：随调用所在会话定位、每 1.5 秒从本地仪表盘拉取最新数据、仪表盘不在线时回退为调用时的快照并提示。小组件支持 inline / fullscreen / pip 显示模式。
+
 ### Codex CLI 状态栏
 
 在 `~/.codex/config.toml` 中开启实验功能并选择本插件作为状态栏：

@@ -53,7 +53,8 @@ export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
       return res.writeHead(403).end('forbidden host');
     }
     if (url.pathname === '/api/state') {
-      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      // Read-only local data; CORS-open so sandboxed MCP app widgets (any origin) can poll it.
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*' });
       return res.end(JSON.stringify(snapshot(Number(url.searchParams.get('limit')) || 30)));
     }
     if (url.pathname === '/api/events') {

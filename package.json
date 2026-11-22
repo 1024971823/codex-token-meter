@@ -1,6 +1,6 @@
 {
   "name": "codex-token-meter",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Live token usage and estimated cost per Codex agent and sub-agent (input/output/model) in a terminal TUI and a web dashboard.",
   "type": "module",
   "bin": {

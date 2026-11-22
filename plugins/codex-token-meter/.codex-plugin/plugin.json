@@ -1,6 +1,6 @@
 {
   "name": "codex-token-meter",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Live per-agent token usage (input / cached / output / reasoning) and model for Codex main agents and sub-agents: a floating always-on-top mini window that follows the active session, a Codex CLI statusline, a terminal TUI and a local web dashboard.",
   "keywords": [
     "tokens",
