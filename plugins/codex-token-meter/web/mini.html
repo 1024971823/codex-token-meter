@@ -60,7 +60,9 @@
   <div class="hint" id="hint" hidden></div>
 </div>
 <script>
-const $ = (id) => document.getElementById(id);
+// Look elements up through #app: it moves into the Picture-in-Picture document when pinned.
+const app = document.getElementById('app');
+const $ = (id) => app.querySelector('#' + id);
 const fmt = (n) => { n = n || 0; if (n >= 1e9) return (n/1e9).toFixed(2)+'B'; if (n >= 1e6) return (n/1e6).toFixed(2)+'M'; if (n >= 1e4) return (n/1e3).toFixed(1)+'k'; return n.toLocaleString('en-US'); };
 const ago = (ts) => { if (!ts) return '-'; const s = Math.max(0, Math.round((Date.now()-ts)/1000)); return s<60?s+'s':s<3600?Math.floor(s/60)+'m':s<86400?Math.floor(s/3600)+'h':Math.floor(s/86400)+'d'; };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
@@ -82,8 +84,11 @@ function current() {
 
 function renderPicker() {
   const pick = $('pick');
+  const listed = state.sessions.slice(0, 20);
+  const pinned = state.sessions.find((s) => s.id === choice);
+  if (pinned && !listed.includes(pinned)) listed.push(pinned);
   const opts = [`<option value="auto">自动跟随当前 Codex 会话</option>`].concat(
-    state.sessions.slice(0, 20).map((s) => `<option value="${esc(s.id)}">${esc(base(s.cwd) || s.id.slice(-8))} · ${esc(s.id.slice(-6))} · ${fmt(s.subtreeUsage.total)}</option>`));
+    listed.map((s) => `<option value="${esc(s.id)}">${esc(base(s.cwd) || s.id.slice(-8))} · ${esc(s.id.slice(-6))} · ${fmt(s.subtreeUsage.total)}</option>`));
   const html = opts.join('');
   if (pick.dataset.html !== html) { pick.innerHTML = html; pick.dataset.html = html; }
   pick.value = state.sessions.some((s) => s.id === choice) ? choice : 'auto';
@@ -143,7 +148,6 @@ $('pin').onclick = async () => {
     $('hint').textContent = '当前浏览器不支持置顶悬浮窗，请用 Chrome 或 Edge 116+ 打开本页。';
     return;
   }
-  const app = $('app');
   pip = await documentPictureInPicture.requestWindow({ width: 360, height: 480 });
   document.querySelectorAll('style').forEach((st) => pip.document.head.appendChild(st.cloneNode(true)));
   pip.document.title = document.title;
