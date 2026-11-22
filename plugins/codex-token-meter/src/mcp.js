@@ -127,8 +127,9 @@ export function handleRequest(store, msg, env = process.env) {
         const port = Number(env.CODEX_TOKEN_METER_PORT) || 4399;
         const html = fs
           .readFileSync(WIDGET_HTML, 'utf8')
-          .replace('__API__', `http://127.0.0.1:${port}`)
-          .replace('__EMBED__', JSON.stringify({ session }));
+          .replaceAll('__API__', `http://127.0.0.1:${port}`)
+          // Guard against `</script>` in embedded data terminating the script early.
+          .replaceAll('__EMBED__', JSON.stringify({ session }).replaceAll('</', '<\\/'));
         return {
           contents: [
             {
