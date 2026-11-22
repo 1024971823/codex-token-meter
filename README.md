@@ -125,6 +125,8 @@ Codex 桌面版和 IDE 扩展目前没有给插件开放嵌入自定义页面的
 
 `token_usage` 工具带有 `openai/outputTemplate` 元数据（MCP App）。在 ChatGPT 桌面版 / Codex Desktop 里，当模型调用 `token_usage`（比如你问“现在用了多少 token”）时，会在会话中内嵌渲染一个实时面板：随调用所在会话定位、每 1.5 秒从本地仪表盘拉取最新数据、仪表盘不在线时回退为调用时的快照并提示。小组件支持 inline / fullscreen / pip 显示模式。
 
+**自动显示（不需要主动问）**：插件的 `UserPromptSubmit` hook 会向模型上下文注入一条指令，让模型每轮回复时自动调用一次 `token_usage`——每条回复里都带一个实时 token 面板。想关掉这个自动注入，把环境变量 `CODEX_TOKEN_METER_NUDGE=0` 设上即可。
+
 ### Codex CLI 状态栏
 
 在 `~/.codex/config.toml` 中开启实验功能并选择本插件作为状态栏：
