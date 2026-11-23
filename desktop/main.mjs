@@ -35,21 +35,26 @@ function writeConfig(cfg) {
   fs.writeFileSync(configFile(), JSON.stringify(cfg, null, 2), { mode: 0o600 });
 }
 
-// The Devin API key is encrypted with the OS keychain (safeStorage) when available.
+// The Devin API key is only persisted encrypted with the OS keychain (safeStorage).
+// Without one it is kept in memory for this run and never written to disk.
+let sessionDevinKey = null;
+
 function encodeKey(key) {
   if (!key) return null;
   if (safeStorage.isEncryptionAvailable()) return { enc: safeStorage.encryptString(key).toString('base64') };
-  return { plain: key };
+  sessionDevinKey = key;
+  return null;
 }
 
 function decodeKey(stored) {
-  if (!stored) return process.env.DEVIN_API_KEY || null;
-  try {
-    if (stored.enc) return safeStorage.decryptString(Buffer.from(stored.enc, 'base64'));
-  } catch {
-    return null;
+  if (stored?.enc) {
+    try {
+      return safeStorage.decryptString(Buffer.from(stored.enc, 'base64'));
+    } catch {
+      return null;
+    }
   }
-  return stored.plain || null;
+  return sessionDevinKey || process.env.DEVIN_API_KEY || null;
 }
 
 let config;
@@ -210,7 +215,8 @@ ipcMain.handle('atm:get-settings', () => ({
   devinOrgId: config.devin?.orgId || '',
   devinBaseUrl: config.devin?.baseUrl || '',
   devinKeySet: !!decodeKey(config.devinKey),
-  devinKeyFromEnv: !config.devinKey && !!process.env.DEVIN_API_KEY,
+  devinKeyFromEnv: !config.devinKey && !sessionDevinKey && !!process.env.DEVIN_API_KEY,
+  devinKeySessionOnly: !config.devinKey && !!sessionDevinKey,
   keyEncrypted: safeStorage.isEncryptionAvailable(),
   url: baseUrl,
   configFile: configFile(),
@@ -221,7 +227,10 @@ ipcMain.handle('atm:save-settings', async (_e, s) => {
   if (Number(s.sinceHours) > 0) next.sinceHours = Number(s.sinceHours);
   if (typeof s.devinOrgId === 'string') next.devin.orgId = s.devinOrgId.trim();
   if (typeof s.devinBaseUrl === 'string') next.devin.baseUrl = s.devinBaseUrl.trim();
-  if (s.clearDevinKey) next.devinKey = null;
+  if (s.clearDevinKey) {
+    next.devinKey = null;
+    sessionDevinKey = null;
+  }
   else if (typeof s.devinKey === 'string' && s.devinKey.trim()) next.devinKey = encodeKey(s.devinKey.trim());
   config = next;
   writeConfig(config);

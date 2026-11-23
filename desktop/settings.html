@@ -45,6 +45,8 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
 const STATE = { active:'活跃', connected:'已连接', installed:'已安装 · 无数据', 'not-found':'未发现', 'needs-key':'需要 API 密钥', error:'错误', connecting:'连接中', detecting:'检测中' };
 let settings;
+const keyLabel = () => !settings.devinKeySet ? (settings.keyEncrypted ? '(未设置)' : '(未设置；系统没有加密存储，密钥只在本次运行有效，可改用环境变量 DEVIN_API_KEY)')
+  : settings.devinKeyFromEnv ? '(使用环境变量 DEVIN_API_KEY)' : settings.devinKeySessionOnly ? '(仅本次运行有效：系统没有加密存储，未写入磁盘)' : '(已加密保存)';
 function renderProviders(status) {
   const byId = Object.fromEntries((status || []).map((p) => [p.id, p]));
   const boxes = [...document.querySelectorAll('#providers input[type=checkbox]')];
@@ -60,7 +62,7 @@ function renderProviders(status) {
 async function init() {
   settings = await window.atm.getSettings();
   $('org').value = settings.devinOrgId; $('base').value = settings.devinBaseUrl; $('since').value = settings.sinceHours;
-  $('keyState').textContent = settings.devinKeySet ? (settings.devinKeyFromEnv ? '(使用环境变量 DEVIN_API_KEY)' : '(已保存' + (settings.keyEncrypted ? '，已加密' : '') + ')') : '(未设置)';
+  $('keyState').textContent = keyLabel();
   $('info').textContent = `本地仪表盘: ${settings.url} · 配置文件: ${settings.configFile}`;
   renderProviders(await window.atm.providerStatus());
 }
@@ -71,7 +73,7 @@ async function save(extra = {}) {
     const status = await window.atm.saveSettings({ providers, devinKey: $('key').value, devinOrgId: $('org').value, devinBaseUrl: $('base').value, sinceHours: $('since').value, ...extra });
     $('key').value = '';
     settings = await window.atm.getSettings();
-    $('keyState').textContent = settings.devinKeySet ? '(已保存' + (settings.keyEncrypted ? '，已加密' : '') + ')' : '(未设置)';
+    $('keyState').textContent = keyLabel();
     renderProviders(status);
     const devin = status.find((p) => p.id === 'devin-cloud');
     $('msg').className = devin && devin.state === 'error' ? 'err' : 'ok';
