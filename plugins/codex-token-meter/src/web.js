@@ -15,6 +15,14 @@ const isSameOrigin = (origin, host) => {
   }
 };
 
+// Cloud-account data (Devin sessions fetched with the user's API key) is only
+// served to our own pages, never to other origins reading the CORS-open state.
+export function redactAccountData(snap) {
+  if (!snap.byProvider || !snap.byProvider['devin-cloud']) return snap;
+  const { 'devin-cloud': _hidden, ...byProvider } = snap.byProvider;
+  return { ...snap, sessions: snap.sessions.filter((s) => s.provider !== 'devin-cloud'), byProvider, totals: { ...snap.totals, acus: null } };
+}
+
 export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
   const clients = new Set();
   // The session the user last interacted with in Codex (reported by the plugin hooks).
@@ -55,7 +63,9 @@ export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
     if (url.pathname === '/api/state') {
       // Read-only local data; CORS-open so sandboxed MCP app widgets (any origin) can poll it.
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*' });
-      return res.end(JSON.stringify(snapshot(Number(url.searchParams.get('limit')) || 30)));
+      const snap = snapshot(Number(url.searchParams.get('limit')) || 30);
+      const crossOrigin = req.headers.origin && !isSameOrigin(req.headers.origin, req.headers.host);
+      return res.end(JSON.stringify(crossOrigin ? redactAccountData(snap) : snap));
     }
     if (url.pathname === '/api/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
