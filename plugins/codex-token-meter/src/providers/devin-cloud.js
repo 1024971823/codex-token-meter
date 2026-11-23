@@ -47,6 +47,9 @@ export class DevinCloudStore extends ThreadStore {
   }
 
   async get(pathname) {
+    const url = new URL(`${this.baseUrl}${pathname}`);
+    const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) throw new Error('Devin API URL must use https://');
     const res = await this.fetch(`${this.baseUrl}${pathname}`, { headers: { authorization: `Bearer ${this.apiKey}`, accept: 'application/json' } });
     if (!res.ok) {
       let detail = '';
