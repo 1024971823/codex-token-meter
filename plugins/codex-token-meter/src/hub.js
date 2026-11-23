@@ -129,7 +129,10 @@ export class Hub extends EventEmitter {
       if (id === 'devin-cloud') {
         if (!store.apiKey) state = 'needs-key';
         else if (store.state.error) [state, detail] = ['error', store.state.error];
-        else if (store.state.ok) [state, detail] = [sessions ? 'active' : 'connected', store.state.principal];
+        else if (store.state.ok) {
+          state = sessions ? 'active' : 'connected';
+          detail = [store.state.principal, store.state.truncated && `only the newest ${store.state.truncated} sessions are counted`].filter(Boolean).join(' · ') || null;
+        }
         else state = 'connecting';
       } else if (id === 'antigravity' && roots.length && !sqlite) {
         [state, detail] = ['error', 'SQLite unavailable: needs Node >= 22.13 or the sql.js package'];

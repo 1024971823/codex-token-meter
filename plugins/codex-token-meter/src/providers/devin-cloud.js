@@ -13,7 +13,7 @@ function mapStatus(s) {
 }
 
 export class DevinCloudStore extends ThreadStore {
-  constructor({ apiKey, orgId, baseUrl = DEVIN_API_BASE, sinceHours = 24, pollMs = 30000, maxPages = 5, fetchImpl = globalThis.fetch, pricingFile, pricing } = {}) {
+  constructor({ apiKey, orgId, baseUrl = DEVIN_API_BASE, sinceHours = 24, pollMs = 30000, maxPages = 20, fetchImpl = globalThis.fetch, pricingFile, pricing } = {}) {
     super({ sinceHours, pricingFile, pricing, providerId: 'devin-cloud' });
     this.apiKey = apiKey || null;
     this.orgId = orgId || null;
@@ -86,6 +86,7 @@ export class DevinCloudStore extends ThreadStore {
     const cutoff = (Date.now() - this.sinceMs) / 1000;
     const items = [];
     let after = null;
+    let truncated = false;
     for (let page = 0; page < this.maxPages; page++) {
       const q = new URLSearchParams({ first: '100' });
       if (after) q.set('after', after);
@@ -94,6 +95,7 @@ export class DevinCloudStore extends ThreadStore {
       items.push(...batch);
       if (!data.has_next_page || !data.end_cursor || batch.every((s) => (s.updated_at || 0) < cutoff)) break;
       after = data.end_cursor;
+      if (page === this.maxPages - 1) truncated = true;
     }
     const recent = items.filter((s) => (s.updated_at || 0) >= cutoff);
     const before = JSON.stringify([...this.threads.values()].map((t) => [t.id, t.acus, t.status, t.updatedAt, t.title]));
@@ -118,7 +120,7 @@ export class DevinCloudStore extends ThreadStore {
     }
     const after_ = JSON.stringify([...this.threads.values()].map((t) => [t.id, t.acus, t.status, t.updatedAt, t.title]));
     const wasOk = this.state.ok;
-    this.state = { ...this.state, ok: true, error: null, lastSync: Date.now() };
+    this.state = { ...this.state, ok: true, error: null, lastSync: Date.now(), truncated: truncated ? items.length : null };
     if (before !== after_ || !wasOk) this.bump();
     return true;
   }
