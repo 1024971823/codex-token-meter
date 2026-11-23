@@ -222,7 +222,9 @@ test('web: cross-origin state omits Devin cloud sessions', async () => {
   const { port } = server.address();
   const get = async (headers) => (await fetch(`http://127.0.0.1:${port}/api/state`, { headers })).json();
   assert.ok((await get({})).sessions.some((s) => s.provider === 'devin-cloud'));
-  assert.equal((await get({ origin: 'http://localhost:9999' })).sessions.some((s) => s.provider === 'devin-cloud'), false);
+  const foreign = await get({ origin: 'http://localhost:9999' });
+  assert.equal(foreign.sessions.some((s) => s.provider === 'devin-cloud'), false);
+  assert.equal(foreign.providers.some((p) => p.id === 'devin-cloud'), false);
   server.close();
   hub.stop();
 });

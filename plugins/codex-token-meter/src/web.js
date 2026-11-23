@@ -20,7 +20,13 @@ const isSameOrigin = (origin, host) => {
 export function redactAccountData(snap) {
   if (!snap.byProvider || !snap.byProvider['devin-cloud']) return snap;
   const { 'devin-cloud': _hidden, ...byProvider } = snap.byProvider;
-  return { ...snap, sessions: snap.sessions.filter((s) => s.provider !== 'devin-cloud'), byProvider, totals: { ...snap.totals, acus: null } };
+  return {
+    ...snap,
+    providers: (snap.providers || []).filter((p) => p.id !== 'devin-cloud'),
+    sessions: snap.sessions.filter((s) => s.provider !== 'devin-cloud'),
+    byProvider,
+    totals: { ...snap.totals, acus: null },
+  };
 }
 
 export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
