@@ -141,7 +141,7 @@ function render() {
   agentRows(s, '', '', rows);
   const subCount = (function count(n) { return n.children.reduce((a, c) => a + 1 + count(c), 0); })(s);
   $('body').innerHTML = `
-    <div class="title">${state.providers && s.provider ? `<span class="badge ${esc(s.provider)}">${esc(PNAME[s.provider] || s.provider)}</span>` : ''}<b title="${esc(s.cwd || '')}">${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(label(s))}</a>` : esc(s.title || base(s.cwd) || '会话')}</b>${auto && followed ? '<span class="follow">跟随中</span>' : ''}</div>
+    <div class="title">${state.providers && s.provider ? `<span class="badge ${esc(s.provider)}">${esc(PNAME[s.provider] || s.provider)}</span>` : ''}<b title="${esc(s.cwd || '')}">${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(label(s))}</a>` : esc(label(s))}</b>${auto && followed ? '<span class="follow">跟随中</span>' : ''}</div>
     <div class="sub">会话 ${esc(s.id)}</div>
     <div class="big"><span class="v">${fmt(u.total)}</span><span class="d">${delta ? '最近 +' + fmt(delta) : ''}</span><span class="d" style="color:var(--yellow)">${nodeCost(s, true)}</span></div>
     <div class="grid">
@@ -158,7 +158,16 @@ $('pick').onchange = (e) => { choice = e.target.value; localStorage.setItem('ctm
 
 // Document Picture-in-Picture keeps the mini view above every other window (Chrome / Edge 116+).
 let pip = null;
+// Inside the Agent Token Meter desktop app the window itself can stay on top.
+if (window.atm && window.atm.setAlwaysOnTop) {
+  window.atm.isAlwaysOnTop().then((on) => { $('pin').textContent = on ? '取消置顶' : '置顶'; });
+}
 $('pin').onclick = async () => {
+  if (window.atm && window.atm.setAlwaysOnTop) {
+    const on = await window.atm.setAlwaysOnTop($('pin').textContent === '置顶');
+    $('pin').textContent = on ? '取消置顶' : '置顶';
+    return;
+  }
   if (pip) { pip.close(); return; }
   if (!('documentPictureInPicture' in window)) {
     $('hint').hidden = false;

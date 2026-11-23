@@ -1,2 +1,4 @@
 node_modules/
 *.log
+desktop/node_modules/
+desktop/dist/

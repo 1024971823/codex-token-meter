@@ -8,6 +8,48 @@
 - **终端 TUI**：在另一个终端里运行，按 agent 树实时刷新。
 - **网页仪表盘**：`http://127.0.0.1:4399`，通过 SSE 实时推送。
 
+## 独立桌面软件：Agent Token Meter（0.5.0）
+
+不依赖 Codex 或 ChatGPT 的独立桌面应用（Windows / macOS / Linux），**自动识别**本机装了哪些 AI 编程工具，连上有数据的工具后实时显示每个会话的主 agent / 子 agent、模型、输入 / 缓存 / 输出 / 推理 token、费用估算：
+
+| 来源 | 覆盖的产品 | 数据来自 | 显示内容 |
+|---|---|---|---|
+| Codex | CLI、Codex 桌面版、IDE 扩展 | `~/.codex/sessions/**/rollout-*.jsonl` | token、模型、子 agent 树、费用 |
+| Claude Code | CLI、Claude 桌面版里的 Claude Code、IDE 扩展 | `~/.claude/projects/**.jsonl`、`~/.config/claude/projects`（或 `$CLAUDE_CONFIG_DIR`），子 agent 在 `<会话>/subagents/` | token（含缓存读写）、模型、子 agent、费用 |
+| Antigravity | IDE、CLI、ACP | `~/.gemini/antigravity*/conversations/*.db`、`~/.config/antigravity/conversations`（或 `$ANTIGRAVITY_DATA_DIR`），只读 | token、模型（Gemini / Claude / GPT-OSS）、费用 |
+| Devin 本地 | Devin for Terminal、Devin 桌面版的本地 agent | `~/.local/share/devin`、`%APPDATA%\devin`（或 `$DEVIN_DATA_DIR`） | 实验性：格式未公开，尽量读取会话、token 和 ACU |
+| Devin 云端 | 网页版、Slack、Devin 桌面版、API 发起的会话 | Devin API v3（需要服务用户 API 密钥 `cog_…`） | 每个会话的 ACU、状态、子会话、模型档位，可点开会话链接 |
+
+<img src="docs/desktop-app.png" width="720" alt="Agent Token Meter 桌面应用：顶部是各来源连接状态">
+
+每个来源有一个状态：**活跃**（有最近会话）、**已连接**（找到数据目录）、**已安装**（找到命令或正在运行的桌面应用，但还没有数据）、**未发现**、**需要 API 密钥**、**错误**。同时检测正在运行的 Codex / Claude / Antigravity / Devin 桌面应用和命令行进程。
+
+**界面**：主窗口是仪表盘（顶部是各来源的连接状态，点一下只看这个来源）；托盘菜单里可以打开**置顶悬浮小窗**、看各来源状态、设置开机自启；关掉主窗口会缩到托盘。
+
+**设置**：托盘 → 设置。可以开关每个来源；填 Devin API 密钥（app.devin.ai → Settings → Devin API → Service users），密钥用系统钥匙串（safeStorage）加密存在本机，只发给 `api.devin.ai`。也可以用环境变量 `DEVIN_API_KEY` / `DEVIN_ORG_ID`。
+
+**安装**：到 GitHub Actions 的 `desktop` 工作流下载对应系统的安装包（`.exe` / `.dmg` / `.AppImage` / `.deb`），或自己构建：
+
+```bash
+cd desktop
+npm install
+npx install-electron --no      # Electron 43 需要 Node >= 22.12
+npm start                      # 开发运行
+npm run dist                   # 打包当前系统的安装包，输出到 desktop/dist/
+```
+
+安装包没有代码签名：macOS 首次打开要在「系统设置 → 隐私与安全性」里允许，Windows SmartScreen 选「仍要运行」。
+
+**不想装桌面应用**：命令行 `agent-token-meter`（随本包安装）默认连接全部来源，和 `codex-token-meter` 一样有 `tui` / `web` / `summary` / `json` / `mini`：
+
+```bash
+agent-token-meter web --open                 # 多来源网页仪表盘
+agent-token-meter summary                    # 文本摘要（含各来源连接状态）
+codex-token-meter --providers codex,claude   # 原命令也能用 --providers 选来源
+```
+
+Codex 插件（MCP 面板、状态栏、hook）保持只看 Codex，用法不变。
+
 <img src="docs/mini-window.png" width="320" alt="悬浮小窗">
 
 不需要 API key，也不依赖第三方 npm 包（Node >= 18）。
@@ -194,6 +236,8 @@ npm run mock             # 本地 mock Responses API（:18080），用于无 key
 mock 用法：在 `$CODEX_HOME/config.toml` 中配置 `model_provider = "mock"`，`base_url = "http://127.0.0.1:18080/v1"`，然后 `codex exec "SPAWN_TEST"` 会生成一个主 agent 和两个子 agent（explorer / worker），子 agent 会多轮请求，便于观察实时变化。`MOCK_CHILD_DELAY_MS`、`MOCK_CHILD_STEPS` 可调节节奏。
 
 ## 限制
+
+- **独立桌面软件**：Antigravity 需要 SQLite（桌面应用自带；命令行需要 Node >= 22.13 或已安装可选依赖 `sql.js`）。Devin 本地会话的文件格式没有公开文档，读取是尽力而为，没有在真实登录的 Devin CLI 上验证过。Devin 云端只有 ACU，没有 token。macOS / Windows 安装包由 CI 构建，未在真机上测试过。Claude / Gemini 定价按官方 API 价，订阅制不按此计费。
 
 - 费用是按 OpenAI API 定价的估算，不是账单；定价以 <https://platform.openai.com/docs/pricing> 为准，内置定价表见「费用估算」。
 - 只读取本机 rollout 文件；网页服务默认只监听 127.0.0.1。

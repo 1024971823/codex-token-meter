@@ -1,0 +1,40 @@
+{
+  "name": "agent-token-meter-desktop",
+  "productName": "Agent Token Meter",
+  "version": "0.5.0",
+  "description": "Standalone desktop app: live token usage, models, sub-agents and cost for Codex, Claude Code, Antigravity and Devin.",
+  "main": "main.mjs",
+  "desktopName": "agent-token-meter.desktop",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "author": "codex-token-meter",
+  "homepage": "https://github.com/1024971823/codex-token-meter",
+  "scripts": {
+    "start": "electron .",
+    "smoke": "electron . --smoke",
+    "dist": "electron-builder",
+    "dist:linux": "electron-builder --linux AppImage",
+    "dist:mac": "electron-builder --mac dmg",
+    "dist:win": "electron-builder --win nsis"
+  },
+  "dependencies": {
+    "sql.js": "1.13.0"
+  },
+  "devDependencies": {
+    "electron": "^43.0.0",
+    "electron-builder": "26.16.1"
+  },
+  "build": {
+    "appId": "io.github.agent-token-meter",
+    "productName": "Agent Token Meter",
+    "directories": { "output": "dist", "buildResources": "build" },
+    "files": ["main.mjs", "preload.cjs", "settings.html", "build/icon.png", "build/tray*.png", "package.json"],
+    "extraResources": [{ "from": "../plugins/codex-token-meter", "to": "meter", "filter": ["src/**", "web/**", "bin/**"] }],
+    "asarUnpack": ["node_modules/sql.js/dist/*.wasm"],
+    "mac": { "category": "public.app-category.developer-tools", "target": ["dmg", "zip"], "icon": "build/icon.png" },
+    "win": { "target": ["nsis", "portable"], "icon": "build/icon.png" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true },
+    "linux": { "target": ["AppImage", "deb"], "syncDesktopName": true, "maintainer": "codex-token-meter", "category": "Development", "icon": "build/icon.png" }
+  }
+}

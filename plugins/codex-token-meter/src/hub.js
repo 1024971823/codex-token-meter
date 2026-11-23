@@ -65,7 +65,13 @@ export class Hub extends EventEmitter {
         }),
     };
     this.stores = Object.fromEntries(providers.map((id) => [id, make[id]()]));
-    for (const store of Object.values(this.stores)) store.on('change', () => this.bump());
+    for (const [id, store] of Object.entries(this.stores)) {
+      store.on('change', () => {
+        this.bump();
+        // Connection state of the API provider changes with each sync; reflect it right away.
+        if (id === 'devin-cloud') this.detect();
+      });
+    }
   }
 
   bump() {

@@ -6,6 +6,13 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 let backend;
+let sqlJsInit = null;
+
+/** Lets a host (e.g. the Electron app, where this file sits outside node_modules) supply sql.js's init function. */
+export function useSqlJs(init) {
+  sqlJsInit = init;
+  if (backend === null) backend = undefined;
+}
 
 async function loadBackend() {
   if (backend !== undefined) return backend;
@@ -22,7 +29,7 @@ async function loadBackend() {
     return backend;
   } catch {}
   try {
-    const initSqlJs = require('sql.js');
+    const initSqlJs = sqlJsInit || require('sql.js');
     const SQL = await initSqlJs();
     backend = { kind: 'sql.js', SQL };
     return backend;
