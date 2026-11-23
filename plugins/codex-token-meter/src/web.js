@@ -117,8 +117,14 @@ export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
     server.once('error', reject);
     server.listen(port, host, () => {
       store.on('change', push);
-      setInterval(() => { if (clients.size) broadcast(); }, 1000).unref();
-      setInterval(() => {
+      const timers = [];
+      server.on('close', () => {
+        store.off('change', push);
+        timers.forEach(clearInterval);
+        clearTimeout(pending);
+      });
+      timers.push(setInterval(() => { if (clients.size) broadcast(); }, 1000).unref());
+      timers.push(setInterval(() => {
         for (const res of clients) {
           try {
             res.write(': ping\n\n');
@@ -126,7 +132,7 @@ export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
             clients.delete(res);
           }
         }
-      }, 15000).unref();
+      }, 15000).unref());
       resolve(server);
     });
   });
