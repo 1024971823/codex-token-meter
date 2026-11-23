@@ -124,7 +124,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function ensureWeb(opts) {
   const running = await runningMeter(opts.host, opts.port);
   if (running && !sameHome(running, opts)) {
-    console.error(`端口 ${opts.port} 已被监控 ${running.codexHome} 的仪表盘占用，未为 ${opts.codexHome} 启动`);
+    console.error(`端口 ${opts.port} 已被另一个仪表盘占用 (${running.codexHome}, 来源 ${(running.providers || ['codex']).join(',')})，未启动; 请用 --port 换一个端口`);
     return false;
   }
   if (running) return true;
@@ -163,7 +163,8 @@ function openMini(url) {
   spawn(browser, [`--app=${url}`, '--window-size=380,560', '--window-position=40,80'], { detached: true, stdio: 'ignore' }).unref();
 }
 
-const sameHome = (h, opts) => !h.codexHome || path.resolve(h.codexHome) === path.resolve(opts.codexHome);
+const sameProviders = (h, opts) => [...(h.providers || ['codex'])].sort().join() === [...parseProviders(opts.providers)].sort().join();
+const sameHome = (h, opts) => (!h.codexHome || path.resolve(h.codexHome) === path.resolve(opts.codexHome)) && sameProviders(h, opts);
 
 async function web(store, opts, { quiet = false } = {}) {
   const url = `http://${opts.host === '0.0.0.0' ? '127.0.0.1' : opts.host}:${opts.port}`;
@@ -172,7 +173,7 @@ async function web(store, opts, { quiet = false } = {}) {
   } catch (e) {
     const running = e.code === 'EADDRINUSE' ? await runningMeter(opts.host, opts.port) : null;
     if (running && !sameHome(running, opts)) {
-      console.error(`端口 ${opts.port} 已被监控 ${running.codexHome} 的仪表盘占用，请用 --port 换一个端口`);
+      console.error(`端口 ${opts.port} 已被另一个仪表盘占用 (${running.codexHome}, 来源 ${(running.providers || ['codex']).join(',')})，请用 --port 换一个端口`);
       process.exit(1);
     }
     if (running) {

@@ -101,7 +101,7 @@ export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
     }
     if (url.pathname === '/api/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ ok: true, app: 'codex-token-meter', codexHome: store.codexHome }));
+      return res.end(JSON.stringify({ ok: true, app: 'codex-token-meter', codexHome: store.codexHome, providers: store.ids || ['codex'] }));
     }
     if (url.pathname === '/' || url.pathname === '/index.html') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
