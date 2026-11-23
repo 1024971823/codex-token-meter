@@ -74,6 +74,23 @@ export class ClaudeStore extends ThreadStore {
       const info = claudePathInfo(p);
       this.files.set(p, { offset: 0, buf: '', info });
     }
+    // Forget transcripts idle beyond the window; a resumed one is re-read from the start.
+    const live = new Set(found);
+    let pruned = false;
+    for (const p of [...this.files.keys()]) if (!live.has(p)) this.files.delete(p);
+    for (const [id, t] of this.threads) {
+      if (t.file && !this.files.has(t.file)) {
+        this.threads.delete(id);
+        pruned = true;
+      }
+    }
+    for (const [id, t] of this.threads) {
+      if (!t.file && ![...this.threads.values()].some((c) => c.parentId === id)) {
+        this.threads.delete(id);
+        pruned = true;
+      }
+    }
+    if (pruned) this.bump();
   }
 
   threadFor(file, st, rec) {
