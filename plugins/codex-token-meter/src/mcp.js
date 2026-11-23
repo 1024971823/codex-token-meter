@@ -1,6 +1,17 @@
 // Minimal stdio MCP server (newline-delimited JSON-RPC). It advertises a Codex TUI statusline
-// entrypoint so the Codex CLI footer shows the displayed thread's token usage, and a read-only
-// `token_usage` tool for the model.
+// entrypoint so the Codex CLI footer shows the displayed thread's token usage, a read-only
+// `token_usage` tool for the model (with an inline MCP App widget via `openai/outputTemplate`),
+// and a desktop in-app panel (`token_meter_panel`) via OpenAI MCP Extensions entrypoints
+// (thread side panel + global sidebar).
+//
+// No new runtime dependencies: the MCP Apps / MCP Extensions wire format used
+// here is plain JSON-RPC (the `ui://` resources, `_meta.ui.resourceUri` and
+// `_meta["openai/ui"].entrypoints`), so the official `@openai/mcp-extensions`
+// SDK — a wrapper around the same protocol, for servers built on
+// `@modelcontextprotocol/sdk`, which this hand-rolled server does not use —
+// would be a rewrite, not a feature. The metadata below follows the spec at
+// https://github.com/openai/mcp-extensions/blob/HEAD/docs/spec.md
+// (verified 2026-11-22) and developers.openai.com/plugins/build/extensions.
 import readline from 'node:readline';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,8 +21,24 @@ import { findSession, countAgents, isRunning } from './session.js';
 
 export const STATUSLINE_URI = 'ui://codex-token-meter/statusline';
 export const WIDGET_URI = 'ui://codex-token-meter/widget';
+export const PANEL_URI = 'ui://codex-token-meter/panel';
+export const PANEL_MIME_TYPE = 'text/html;profile=mcp-app';
 const STATE_META = 'com.openai/codex-statusline-state';
 const WIDGET_HTML = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'web', 'widget.html');
+
+// The panel UI, read lazily from web/panel.html next to this file's parent dir.
+// It is a single self-contained HTML file: no fetch(), no EventSource, no
+// localhost URL — all data arrives over the MCP Apps bridge as the panel
+// tool's structuredContent (see panel.html's header comment).
+let panelHtmlCache = null;
+export function loadPanelHtml() {
+  if (panelHtmlCache === null) {
+    const file = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'web', 'panel.html');
+    panelHtmlCache = fs.readFileSync(file, 'utf8');
+  }
+  return panelHtmlCache;
+}
+export function resetPanelHtmlCache() { panelHtmlCache = null; }
 
 const TOOL = {
   name: 'token_usage',
@@ -35,6 +62,33 @@ const TOOL = {
       preferredDisplayMode: 'inline',
       entrypoints: [{ type: 'statusline', resourceUri: STATUSLINE_URI }],
     },
+  },
+};
+
+// Desktop in-app panel. One tool carries both entrypoints on the same UI:
+//  - thread: a content tab / side panel inside a conversation — the closest
+//    thing to an "internal small window" in the Codex desktop app.
+//  - global: a sidebar entry that opens the same panel fullscreen.
+// The server MUST accept {} as the arguments when an entrypoint opens, so
+// session_id is optional; with no id the panel shows the most recent session
+// and lets the user pick another one in the UI. (The entrypoint open carries
+// no thread id, so the server cannot know which thread opened the panel.)
+// Title is deliberately not the plugin name: the spec asks entrypoint titles
+// to describe the view's contents.
+export const PANEL_TOOL = {
+  name: 'token_meter_panel',
+  title: 'Token Meter Panel',
+  description:
+    'Open the Token Meter panel inside Codex Desktop: live token usage and estimated USD cost per agent, per model and per session. Returns the full snapshot as structuredContent for the panel UI, plus a text summary for hosts without UI. No arguments needed.',
+  inputSchema: {
+    type: 'object',
+    properties: { session_id: { type: 'string', description: 'Codex thread/session id to focus (optional; defaults to the most recent session).' } },
+    additionalProperties: false,
+  },
+  annotations: { readOnlyHint: true },
+  _meta: {
+    ui: { resourceUri: PANEL_URI },
+    'openai/ui': { entrypoints: [{ type: 'thread' }, { type: 'global' }] },
   },
 };
 
@@ -88,20 +142,42 @@ export function usageReport(snapshot, threadId) {
   return out.join('\n');
 }
 
+/** Snapshot for the desktop panel: full structuredContent + a text summary. */
+export function panelToolResult(store, args = {}) {
+  const snap = store.snapshot({ limit: 1000 });
+  const id = args.session_id || null;
+  const text = id ? usageReport(snap, id) : usageReport(snap, snap.sessions[0]?.id);
+  const totals = snap.totals;
+  const summary =
+    totals.cost === null
+      ? `${text}\nPanel totals: cost unknown model (not priced, never $0).`
+      : `${text}\nPanel totals: ${totals.all.total} tokens, estimated cost ${totals.costPriced ? '' : '~'}${fmtCost(totals.cost)} USD (OpenAI list prices ${snap.pricing.date}; an estimate, not a bill).`;
+  return { content: [{ type: 'text', text: summary }], structuredContent: snap };
+}
+
 export function handleRequest(store, msg, env = process.env) {
   const p = msg.params || {};
   switch (msg.method) {
     case 'initialize':
       return {
         protocolVersion: p.protocolVersion || '2025-06-18',
-        capabilities: { tools: {}, resources: {} },
-        serverInfo: { name: 'codex-token-meter', version: '0.2.1' },
+        capabilities: {
+          tools: {},
+          resources: {},
+          // MCP Apps extension advertisement (io.modelcontextprotocol/ui).
+          // Hosts that do not understand it ignore it; the panel is also
+          // discoverable via tools/list _meta and resources/list alone.
+          extensions: { 'io.modelcontextprotocol/ui': {} },
+        },
+        serverInfo: { name: 'codex-token-meter', version: '0.3.0' },
       };
     case 'ping':
       return {};
     case 'tools/list':
-      return { tools: [TOOL] };
+      // token_usage stays first: existing clients/tests read tools[0].
+      return { tools: [TOOL, PANEL_TOOL] };
     case 'tools/call': {
+      if (p.name === PANEL_TOOL.name) return panelToolResult(store, p.arguments || {});
       if (p.name !== TOOL.name) throw rpcError(-32602, `unknown tool ${p.name}`);
       // Codex sends the calling thread as _meta.threadId on every MCP tool call.
       const id = p.arguments?.session_id || p._meta?.threadId || env.CODEX_THREAD_ID;
@@ -115,6 +191,12 @@ export function handleRequest(store, msg, env = process.env) {
         resources: [
           { uri: STATUSLINE_URI, name: 'token-meter-statusline', mimeType: 'application/json' },
           { uri: WIDGET_URI, name: 'token-meter-widget', mimeType: 'text/html;profile=mcp-app' },
+          {
+            uri: PANEL_URI,
+            name: 'token-meter-panel',
+            mimeType: PANEL_MIME_TYPE,
+            _meta: { 'openai/ui': { availableDisplayModes: ['inline', 'fullscreen'], preferredDisplayMode: 'inline' } },
+          },
         ],
       };
     case 'resources/templates/list':
@@ -143,6 +225,18 @@ export function handleRequest(store, msg, env = process.env) {
               },
             },
           ],
+        };
+      }
+      if (p.uri === PANEL_URI) {
+        return {
+          contents: [{
+            uri: PANEL_URI,
+            mimeType: PANEL_MIME_TYPE,
+            text: loadPanelHtml(),
+            // Spec: ChatGPT uses fullscreen for all entrypoints; the modes
+            // below only matter when the model invokes the app inline.
+            _meta: { 'openai/ui': { availableDisplayModes: ['inline', 'fullscreen'], preferredDisplayMode: 'inline' } },
+          }],
         };
       }
       if (p.uri !== STATUSLINE_URI) throw rpcError(-32002, `unknown resource ${p.uri}`);

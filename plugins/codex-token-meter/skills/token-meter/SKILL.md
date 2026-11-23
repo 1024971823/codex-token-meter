@@ -30,6 +30,19 @@ and reports per-agent token usage. The CLI lives next to this skill at
 If the `token-meter` MCP tool `token_usage` is available, prefer calling it: it returns the
 current session's per-agent usage directly.
 
+## Desktop in-app panel (0.3.0, prototype)
+
+The MCP server also exposes a `token_meter_panel` tool with `thread` and `global`
+entrypoints (OpenAI MCP Extensions): in Codex Desktop it opens the same compact
+usage-and-cost panel inside the app — as a content tab / side panel inside a
+conversation, or from the sidebar. The panel UI is the resource
+`ui://codex-token-meter/panel` (`text/html;profile=mcp-app`); it gets all data
+from the tool's `structuredContent` over the MCP Apps bridge and refreshes by
+re-calling the tool. It is a prototype and has NOT been verified inside the
+real Codex Desktop app — if the user says an entrypoint does not appear or the
+panel is blank, ask for their Desktop version and what they saw; the floating
+mini window remains the fallback for CLI/IDE use.
+
 ## Opening the live dashboard
 
 - Floating mini window (follows the session the user is typing in, can stay on top of Codex):
