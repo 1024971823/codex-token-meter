@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { RolloutStore } from '../plugins/codex-token-meter/src/store.js';
 import { startWeb } from '../plugins/codex-token-meter/src/web.js';
-import { handleRequest, statuslineTree, STATUSLINE_URI, WIDGET_URI } from '../plugins/codex-token-meter/src/mcp.js';
+import { handleRequest, statuslineTree, watchFocus, STATUSLINE_URI, WIDGET_URI } from '../plugins/codex-token-meter/src/mcp.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOME = path.join(HERE, 'fixtures');
@@ -108,5 +108,13 @@ test('web: /api/focus sets the followed session, rejects foreign origins, serves
   const mini = await request(port, { path: '/mini' });
   assert.equal(mini.status, 200);
   assert.match(mini.data, /documentPictureInPicture/);
+  const seen = await new Promise((resolve) => {
+    const stop = watchFocus(port, (f) => { stop(); resolve(f); });
+  });
+  assert.equal(seen.sessionId, CHILD);
   server.close();
+  const none = await new Promise((resolve) => {
+    const stop = watchFocus(port, (f) => { stop(); resolve(f); });
+  });
+  assert.equal(none, null);
 });

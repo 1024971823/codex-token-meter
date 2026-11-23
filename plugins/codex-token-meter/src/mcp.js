@@ -275,12 +275,13 @@ function rpcError(code, message) {
 /** Polls the local dashboard's hook focus (the session the user last typed in); null when it is not running. */
 export function watchFocus(port, onFocus, intervalMs = 2000) {
   const poll = () => {
-    const req = http.get({ host: '127.0.0.1', port, path: '/api/focus', timeout: 800 }, (res) => {
+    // /api/state carries `focus` on every dashboard version that has it (older ones lack GET /api/focus).
+    const req = http.get({ host: '127.0.0.1', port, path: '/api/state?limit=1', timeout: 800 }, (res) => {
       let body = '';
       res.on('data', (d) => (body += d));
       res.on('end', () => {
         try {
-          onFocus(res.statusCode === 200 ? JSON.parse(body) : null);
+          onFocus(res.statusCode === 200 ? JSON.parse(body).focus || null : null);
         } catch {
           onFocus(null);
         }
@@ -295,9 +296,9 @@ export function watchFocus(port, onFocus, intervalMs = 2000) {
   return () => clearInterval(timer);
 }
 
-export function runMcp(store, { input = process.stdin, output = process.stdout, env = process.env } = {}) {
+export function runMcp(store, { input = process.stdin, output = process.stdout, env = process.env, port } = {}) {
   const ctx = { focus: null };
-  const stopFocus = watchFocus(Number(env.CODEX_TOKEN_METER_PORT) || 4399, (f) => (ctx.focus = f));
+  const stopFocus = watchFocus(port || Number(env.CODEX_TOKEN_METER_PORT) || 4399, (f) => (ctx.focus = f));
   const rl = readline.createInterface({ input });
   const send = (obj) => output.write(JSON.stringify(obj) + '\n');
   rl.on('line', (line) => {
