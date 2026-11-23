@@ -92,6 +92,7 @@ const contains = (n, id) => n.id === id || n.children.some((c) => contains(c, id
 const SOURCE = { argument: '指定会话', thread: '当前对话', focus: '最近发消息的会话', latest: '最新会话' };
 const prev = new Map();
 let state = null;          // last structuredContent snapshot
+let hostThread = null;     // conversation id the host passed on its own tool call, if any
 let choice = 'auto';       // in-memory only: the sandbox may block storage
 let bridgeReady = null;
 let rpcId = 0;
@@ -179,13 +180,19 @@ function updateFromResponse(response) {
   // Hosts deliver the tool result as params.structuredContent, or nested
   // under params.result.structuredContent — accept both.
   const sc = response && (response.structuredContent || (response.result && response.result.structuredContent));
-  if (sc && sc.sessions) { state = sc; $('dot').classList.add('on'); render(); }
+  if (sc && sc.sessions) {
+    // The host only names the conversation on the call it makes itself; remember it so refreshes
+    // (which the host may not annotate) keep showing that conversation.
+    if (sc.currentSource === 'thread' && sc.currentSessionId) hostThread = sc.currentSessionId;
+    if (hostThread && sc.currentSessionId === hostThread) sc.currentSource = 'thread';
+    state = sc; $('dot').classList.add('on'); render();
+  }
 }
 
 async function refresh() {
   await bridgeReady;
   try {
-    const res = await rpcRequest('tools/call', { name: 'token_meter_panel', arguments: {} });
+    const res = await rpcRequest('tools/call', { name: 'token_meter_panel', arguments: hostThread ? { session_id: hostThread } : {} });
     updateFromResponse(res);
   } catch (e) { /* keep last rendered state; dot shows the bridge is up */ }
 }
