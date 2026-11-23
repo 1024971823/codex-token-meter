@@ -177,7 +177,10 @@ function buildTray() {
         ...providers,
         { type: 'separator' },
         { label: '设置…', click: openSettings },
-        { label: '开机自动启动', type: 'checkbox', checked: app.getLoginItemSettings().openAtLogin, click: (i) => app.setLoginItemSettings({ openAtLogin: i.checked }) },
+        // Electron's login-item API is macOS/Windows only, and a portable .exe is re-extracted on every run.
+        ...(process.platform !== 'linux' && !process.env.PORTABLE_EXECUTABLE_FILE
+          ? [{ label: '开机自动启动', type: 'checkbox', checked: app.getLoginItemSettings().openAtLogin, click: (i) => app.setLoginItemSettings({ openAtLogin: i.checked }) }]
+          : []),
         { type: 'separator' },
         { label: '退出', click: () => app.quit() },
       ]),
