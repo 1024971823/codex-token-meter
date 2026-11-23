@@ -190,7 +190,8 @@ function renderProviders() {
 function render() {
   if (!state) return;
   renderProviders();
-  const T = provFilter !== 'all' && state.byProvider ? state.byProvider[provFilter] : state.totals;
+  const filter = state.providers ? provFilter : 'all';
+  const T = filter !== 'all' && state.byProvider && state.byProvider[filter] ? state.byProvider[filter] : state.totals;
   let runningCount = 0;
   state.sessions.forEach(function walk(n) { if (n.status === 'running') runningCount++; n.children.forEach(walk); });
   $('working').innerHTML = runningCount
@@ -212,7 +213,7 @@ function render() {
     ? `费用为估算 (按 OpenAI / Anthropic / Google 官方 API 定价 ${state.pricing.date} 换算，以官网为准)，不是账单；“~”表示部分模型未定价。订阅制 (ChatGPT / Claude 订阅) 不按此计费。`
     : '';
 
-  let sessions = provFilter === 'all' ? state.sessions : state.sessions.filter((s) => s.provider === provFilter);
+  let sessions = filter === 'all' ? state.sessions : state.sessions.filter((s) => s.provider === filter);
   const mins = Number($('activeWindow').value);
   if (mins) {
     const active = sessions.filter((s) => Date.now() - s.lastActive < mins * 60 * 1000);
