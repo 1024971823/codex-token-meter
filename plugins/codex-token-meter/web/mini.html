@@ -117,7 +117,7 @@ function agentRows(n, prefix, indent, out) {
   const isMain = n.depth === 0 && !n.nickname;
   const ctx = n.contextWindow ? ` · 上下文 ${Math.min(100, Math.round(n.contextUsed / n.contextWindow * 100))}%` : '';
   out.push(`<div class="ag ${isMain ? '' : 'child'} ${changed ? 'flash' : ''}">
-    <span class="nm"><span class="tree">${prefix}</span><span class="st ${n.status}"></span>${esc(isMain ? 'main' : n.name)}</span>
+    <span class="nm"><span class="tree">${prefix}</span><span class="st ${esc(n.status)}"></span>${esc(isMain ? 'main' : n.name)}</span>
     <span class="dl">${n.last.total ? '+' + fmt(n.last.total) : ''}</span>
     <span class="tot">${fmt(n.usage.total)}</span>
     <span class="meta">${n.role ? `<span class="r">${esc(n.role)}</span> · ` : ''}<span class="m">${esc(n.model || '-')}</span> · ${n.provider === 'devin-cloud' ? fmtAcu(n.acus) : `in ${fmt(n.usage.input)} / out ${fmt(n.usage.output)} · ${nodeCost(n)} · ${n.requests} 次`}${ctx} · ${ago(n.updatedAt)}</span>

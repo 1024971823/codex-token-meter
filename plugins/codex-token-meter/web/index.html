@@ -149,7 +149,7 @@ function row(n, prefix) {
     <td><span class="tree">${prefix}</span><span class="agent ${isMain ? '' : 'sub'}">${esc(isMain ? 'main' : n.name)}</span><span class="id">${esc(n.id.slice(-8))}</span></td>
     <td class="role">${esc(n.role || '-')}</td>
     <td class="model">${esc(n.model || '-')}${n.effort ? ` <span class="id">${esc(n.effort)}</span>` : ''}</td>
-    <td class="st ${n.status}">${STATUS[n.status] || esc(n.status)}${n.compacted ? ' <span class="id" title="发生过上下文压缩">⤺</span>' : ''}</td>
+    <td class="st ${esc(n.status)}">${STATUS[n.status] || esc(n.status)}${n.compacted ? ' <span class="id" title="发生过上下文压缩">⤺</span>' : ''}</td>
     <td>${fmt(n.usage.input)}</td><td>${fmt(n.usage.cached)}</td><td>${fmt(n.usage.output)}</td><td>${fmt(n.usage.reasoning)}</td>
     <td class="total">${fmt(n.usage.total)}</td>
     <td class="total">${nodeCost(n)}</td>

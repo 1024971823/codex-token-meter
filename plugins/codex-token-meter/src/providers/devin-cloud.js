@@ -9,7 +9,7 @@ const STATUS = { new: 'running', claimed: 'running', resuming: 'running', runnin
 function mapStatus(s) {
   if (s.status === 'running' && (s.status_detail === 'waiting_for_user' || s.status_detail === 'waiting_for_approval')) return 'waiting';
   if (s.status === 'running' && s.status_detail === 'finished') return 'done';
-  return STATUS[s.status] || s.status || 'idle';
+  return STATUS[s.status] || 'idle';
 }
 
 export class DevinCloudStore extends ThreadStore {
