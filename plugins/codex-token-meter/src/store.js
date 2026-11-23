@@ -3,18 +3,15 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { EventEmitter } from 'node:events';
-import { estimateCost, estimateCostByModel, loadPricing, PRICING_CURRENCY } from './pricing.js';
+import { ThreadStore, newThread, tailJsonl, emptyUsage, addUsage } from './threads.js';
+
+export { emptyUsage, addUsage };
 
 const ROLLOUT_RE = /^rollout-.*\.jsonl$/;
-const USAGE_KEYS = ['input', 'cached', 'cacheWrite', 'output', 'reasoning', 'total'];
-const HISTORY_LIMIT = 120;
 
 export function defaultCodexHome() {
   return process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
 }
-
-export const emptyUsage = () => ({ input: 0, cached: 0, cacheWrite: 0, output: 0, reasoning: 0, total: 0 });
 
 export function normalizeUsage(u) {
   if (!u) return emptyUsage();
@@ -28,8 +25,6 @@ export function normalizeUsage(u) {
   };
 }
 
-export const addUsage = (a, b) => Object.fromEntries(USAGE_KEYS.map((k) => [k, (a[k] || 0) + (b[k] || 0)]));
-const subUsage = (a, b) => Object.fromEntries(USAGE_KEYS.map((k) => [k, Math.max(0, (a[k] || 0) - (b[k] || 0))]));
 
 function describeSource(source) {
   if (!source) return { kind: 'unknown' };
@@ -46,48 +41,14 @@ function describeSource(source) {
   return { kind: Object.keys(source)[0] || 'unknown' };
 }
 
-function newThread(id, file) {
-  return {
-    id,
-    file,
-    sessionId: null,
-    parentId: null,
-    nickname: null,
-    role: null,
-    depth: 0,
-    source: { kind: 'unknown' },
-    cwd: null,
-    provider: null,
-    model: null,
-    effort: null,
-    contextWindow: null,
-    usage: emptyUsage(),
-    last: emptyUsage(),
-    byModel: {},
-    requests: 0,
-    status: 'idle',
-    startedAt: null,
-    updatedAt: null,
-    history: [],
-    historyStart: null,
-    hasUsageRecords: false,
-  };
-}
-
-export class RolloutStore extends EventEmitter {
+export class RolloutStore extends ThreadStore {
   constructor({ codexHome = defaultCodexHome(), sinceHours = 24, pollMs = 500, scanMs = 2000, pricingFile, pricing } = {}) {
-    super();
-    // Pricing override: --pricing-file (or CODEX_TOKEN_METER_PRICING env) wins over the built-in table.
-    this.pricing = pricing || loadPricing({ pricingFile });
+    super({ sinceHours, pricingFile, pricing, providerId: 'codex' });
     this.codexHome = codexHome;
     this.sessionsDir = path.join(codexHome, 'sessions');
-    this.sinceMs = sinceHours * 3600 * 1000;
     this.pollMs = pollMs;
     this.scanMs = scanMs;
     this.files = new Map(); // path -> { offset, buf, threadId, size }
-    this.threads = new Map(); // threadId -> thread
-    this.version = 0;
-    this.timers = [];
   }
 
   start() {
@@ -97,11 +58,6 @@ export class RolloutStore extends EventEmitter {
     this.timers.push(setInterval(() => this.scan({ full: ++scans % 15 === 0 }), this.scanMs));
     this.timers.push(setInterval(() => this.poll(), this.pollMs));
     return this;
-  }
-
-  stop() {
-    this.timers.forEach(clearInterval);
-    this.timers = [];
   }
 
   /** One-shot load (no timers), for --json snapshots and tests. */
@@ -161,37 +117,8 @@ export class RolloutStore extends EventEmitter {
   }
 
   poll() {
-    let changed = false;
-    for (const [p, st] of this.files) {
-      let size;
-      try {
-        size = fs.statSync(p).size;
-      } catch {
-        continue;
-      }
-      if (size < st.offset) {
-        st.offset = 0;
-        st.buf = '';
-      }
-      if (size === st.offset) continue;
-      const fd = fs.openSync(p, 'r');
-      try {
-        const len = size - st.offset;
-        const chunk = Buffer.alloc(len);
-        fs.readSync(fd, chunk, 0, len, st.offset);
-        st.offset = size;
-        const text = st.buf + chunk.toString('utf8');
-        const lines = text.split('\n');
-        st.buf = lines.pop();
-        for (const line of lines) if (line.trim() && this.ingestLine(p, st, line)) changed = true;
-      } finally {
-        fs.closeSync(fd);
-      }
-    }
-    if (changed) {
-      this.version++;
-      this.emit('change', this.version);
-    }
+    const changed = tailJsonl(this.files, (p, st, line) => this.ingestLine(p, st, line));
+    if (changed) this.bump();
     return changed;
   }
 
@@ -287,143 +214,7 @@ export class RolloutStore extends EventEmitter {
     return false;
   }
 
-  applyTotals(t, total, last, ts) {
-    // A lower cumulative total means the counter was reset (e.g. a new accounting
-    // epoch after compaction); accept it as a fresh baseline instead of freezing.
-    const reset = total.total < t.usage.total;
-    const delta = reset ? total : subUsage(total, t.usage);
-    if (delta.total === 0 && total.total === t.usage.total) return;
-    const model = t.model || 'unknown';
-    t.byModel[model] = addUsage(t.byModel[model] || emptyUsage(), delta);
-    t.usage = total;
-    t.last = last;
-    t.requests++;
-    t.updatedAt = ts;
-    t.history.push([ts, total.total]);
-    if (t.history.length > HISTORY_LIMIT) t.history.shift();
-  }
-
-  /** Builds a JSON-friendly snapshot: sessions (root threads) with nested sub-agents. */
-  snapshot({ limit = 20 } = {}) {
-    const threads = [...this.threads.values()];
-    const byId = new Map(threads.map((t) => [t.id, t]));
-    const children = new Map();
-    for (const t of threads) {
-      const parent = t.parentId && byId.has(t.parentId) ? t.parentId : null;
-      if (parent) {
-        if (!children.has(parent)) children.set(parent, []);
-        children.get(parent).push(t);
-      }
-    }
-    const view = (t) => {
-      const kids = (children.get(t.id) || []).sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0)).map(view);
-      const subtree = kids.reduce((acc, k) => addUsage(acc, k.subtreeUsage), t.usage);
-      // Cost is priced from the per-model deltas (a thread may switch models),
-      // not from the last model seen. `cost` is null when nothing in this
-      // thread is priced, and `costPriced` is false when only part of it is.
-      const byModel = Object.fromEntries(
-        Object.entries(t.byModel).map(([m, u]) => {
-          const est = estimateCost(u, m, this.pricing.table);
-          return [m, { ...u, cost: est ? est.cost : null, priced: !!est }];
-        }),
-      );
-      const own = estimateCostByModel(t.byModel, this.pricing.table);
-      const cost = !own.any ? 0 : own.pricedCount ? own.cost : null;
-      const anyPricedInSubtree = cost !== null || kids.some((k) => k.subtreeCost !== null);
-      const subtreeCost = anyPricedInSubtree ? kids.reduce((acc, k) => acc + (k.subtreeCost || 0), cost || 0) : null;
-      const subtreeCostPriced = own.priced && kids.every((k) => k.subtreeCostPriced);
-      const lastActive = Math.max(t.updatedAt || 0, ...kids.map((k) => k.lastActive));
-      return {
-        id: t.id,
-        name: t.nickname || (t.parentId ? t.role || 'sub-agent' : 'main'),
-        nickname: t.nickname,
-        role: t.role,
-        depth: t.depth,
-        source: t.source.kind + (t.source.subKind ? `:${t.source.subKind}` : ''),
-        model: t.model,
-        effort: t.effort,
-        provider: t.provider,
-        status: t.status,
-        cwd: t.cwd,
-        contextWindow: t.contextWindow,
-        contextUsed: t.lastContextTokens || 0,
-        compacted: !!t.compacted,
-        usage: t.usage,
-        last: t.last,
-        byModel,
-        cost,
-        costPriced: own.priced,
-        requests: t.requests,
-        startedAt: t.startedAt,
-        updatedAt: t.updatedAt,
-        lastActive,
-        history: t.history,
-        subtreeUsage: subtree,
-        subtreeCost,
-        subtreeCostPriced,
-        children: kids,
-      };
-    };
-    const allRoots = threads
-      .filter((t) => !(t.parentId && byId.has(t.parentId)))
-      .map(view)
-      .sort((a, b) => b.lastActive - a.lastActive);
-
-    const totals = { all: emptyUsage(), subagents: emptyUsage(), byModel: {} };
-    const walk = (n, isSub) => {
-      totals.all = addUsage(totals.all, n.usage);
-      if (isSub) totals.subagents = addUsage(totals.subagents, n.usage);
-      for (const [m, u] of Object.entries(n.byModel)) totals.byModel[m] = addUsage(totals.byModel[m] || emptyUsage(), u);
-      n.children.forEach((c) => walk(c, true));
-    };
-    allRoots.forEach((r) => walk(r, r.source.startsWith('subagent')));
-    // Cost totals are priced from the aggregated per-model usage, so a model
-    // used by several threads is priced once, on its combined usage.
-    let allPriced = true;
-    let anyPriced = false;
-    for (const [m, u] of Object.entries(totals.byModel)) {
-      const est = estimateCost(u, m, this.pricing.table);
-      totals.byModel[m] = { ...u, cost: est ? est.cost : null, priced: !!est };
-      if (u.total > 0) {
-        if (est) anyPriced = true;
-        else allPriced = false;
-      }
-    }
-    const sumCost = (byModel) => Object.values(byModel).reduce((a, u) => a + (u.cost || 0), 0);
-    totals.all = { ...totals.all, cost: anyPriced ? sumCost(totals.byModel) : null, priced: allPriced };
-    // Sub-agent cost: aggregate per-model usage over sub-agent nodes only
-    // (depth > 0, or a root whose source is a sub-agent spawn), then price it.
-    const subByModel = {};
-    const collectSub = (n) => {
-      if (n.depth > 0 || n.source.startsWith('subagent')) {
-        for (const [m, u] of Object.entries(n.byModel)) subByModel[m] = addUsage(subByModel[m] || emptyUsage(), u);
-      }
-      n.children.forEach(collectSub);
-    };
-    allRoots.forEach(collectSub);
-    let subPriced = true;
-    let subAnyPriced = false;
-    let subCost = 0;
-    for (const [m, u] of Object.entries(subByModel)) {
-      const est = estimateCost(u, m, this.pricing.table);
-      if (u.total > 0) {
-        if (est) {
-          subAnyPriced = true;
-          subCost += est.cost;
-        } else subPriced = false;
-      }
-    }
-    totals.subagents = { ...totals.subagents, cost: subAnyPriced ? subCost : null, priced: subPriced };
-    totals.cost = totals.all.cost;
-    totals.costPriced = allPriced;
-    totals.currency = PRICING_CURRENCY;
-    return {
-      version: this.version,
-      generatedAt: Date.now(),
-      codexHome: this.codexHome,
-      pricing: { date: this.pricing.date, source: this.pricing.source, currency: PRICING_CURRENCY },
-      sessions: allRoots.slice(0, limit),
-      totals,
-    };
+  snapshot(opts) {
+    return { ...super.snapshot(opts), codexHome: this.codexHome };
   }
 }

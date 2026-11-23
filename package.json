@@ -4,7 +4,8 @@
   "description": "Live token usage and estimated cost per Codex agent and sub-agent (input/output/model) in a terminal TUI, a web dashboard, and an in-app panel inside Codex Desktop (MCP Extensions entrypoints).",
   "type": "module",
   "bin": {
-    "codex-token-meter": "plugins/codex-token-meter/bin/codex-token-meter.js"
+    "codex-token-meter": "plugins/codex-token-meter/bin/codex-token-meter.js",
+    "agent-token-meter": "plugins/codex-token-meter/bin/agent-token-meter.js"
   },
   "files": [
     "plugins/codex-token-meter",
@@ -19,5 +20,8 @@
   "engines": {
     "node": ">=18"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "optionalDependencies": {
+    "sql.js": "^1.13.0"
+  }
 }
