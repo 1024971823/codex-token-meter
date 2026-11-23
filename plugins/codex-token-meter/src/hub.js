@@ -152,7 +152,8 @@ export class Hub extends EventEmitter {
     return Object.values(this.stores).flatMap((s) => s.roots()).sort((a, b) => b.lastActive - a.lastActive);
   }
 
-  snapshot({ limit = 20 } = {}) {
+  /** `perProvider`: apply `limit` to each provider (dashboard) instead of to the merged list. */
+  snapshot({ limit = 20, perProvider = false } = {}) {
     const all = this.roots();
     const byProvider = {};
     for (const id of this.ids) {
@@ -165,8 +166,7 @@ export class Hub extends EventEmitter {
       codexHome: this.codexHome,
       pricing: { date: this.pricing.date, source: this.pricing.source, currency: PRICING_CURRENCY },
       providers: this.ids.map((id) => this.detection[id] || { id, name: PROVIDER_META[id].name, surfaces: PROVIDER_META[id].surfaces, state: 'detecting', sessions: 0, roots: [], bins: [], running: [] }),
-      // Up to `limit` sessions per provider, so a busy source cannot crowd out the others.
-      sessions: this.ids.flatMap((id) => all.filter((r) => r.provider === id).slice(0, limit)).sort((a, b) => b.lastActive - a.lastActive),
+      sessions: perProvider ? this.ids.flatMap((id) => all.filter((r) => r.provider === id).slice(0, limit)).sort((a, b) => b.lastActive - a.lastActive) : all.slice(0, limit),
       totals: computeTotals(all, this.pricing),
       byProvider,
     };

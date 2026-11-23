@@ -200,6 +200,14 @@ test('hub: detects every provider, merges sessions and serves them over the dash
   hub.stop();
 });
 
+test('hub: --limit caps the merged list unless perProvider is set', async () => {
+  const hub = new Hub({ providers: ['codex', 'claude'], codexHome: path.join(HERE, 'fixtures'), sinceHours: 1e7, roots: { claude: [CLAUDE] } });
+  await hub.loadOnce();
+  assert.equal(hub.snapshot({ limit: 1 }).sessions.length, 1);
+  assert.equal(hub.snapshot({ limit: 1, perProvider: true }).sessions.length, 2);
+  hub.stop();
+});
+
 test('hub: provider list parsing', () => {
   assert.deepEqual(parseProviders('codex,devin'), ['codex', 'devin-local', 'devin-cloud']);
   assert.equal(parseProviders('all').length, 5);

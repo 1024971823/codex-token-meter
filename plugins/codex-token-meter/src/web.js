@@ -33,7 +33,8 @@ export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
   const clients = new Set();
   // The session the user last interacted with in Codex (reported by the plugin hooks).
   let focus = null;
-  const snapshot = (limit = 30) => ({ ...store.snapshot({ limit }), focus });
+  // Per-provider limit so a busy source cannot crowd the others out of the dashboard's provider filter.
+  const snapshot = (limit = 30) => ({ ...store.snapshot({ limit, perProvider: true }), focus });
   let pending = null;
   const broadcast = () => {
     const data = `data: ${JSON.stringify(snapshot())}\n\n`;
