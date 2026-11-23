@@ -12,6 +12,7 @@
 // would be a rewrite, not a feature. The metadata below follows the spec at
 // https://github.com/openai/mcp-extensions/blob/HEAD/docs/spec.md
 // (verified 2026-11-22) and developers.openai.com/plugins/build/extensions.
+import http from 'node:http';
 import readline from 'node:readline';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -79,10 +80,10 @@ export const PANEL_TOOL = {
   name: 'token_meter_panel',
   title: 'Token Meter Panel',
   description:
-    'Open the Token Meter panel inside Codex Desktop: live token usage and estimated USD cost per agent, per model and per session. Returns the full snapshot as structuredContent for the panel UI, plus a text summary for hosts without UI. No arguments needed.',
+    'Open the Token Meter panel inside Codex Desktop or the ChatGPT desktop app: live token usage and estimated USD cost per agent, per model and per session. Returns the full snapshot as structuredContent for the panel UI, plus a text summary for hosts without UI. No arguments needed.',
   inputSchema: {
     type: 'object',
-    properties: { session_id: { type: 'string', description: 'Codex thread/session id to focus (optional; defaults to the most recent session).' } },
+    properties: { session_id: { type: 'string', description: 'Codex thread/session id to focus (optional; defaults to the calling conversation, then the session the user last typed in, then the most recent one).' } },
     additionalProperties: false,
   },
   annotations: { readOnlyHint: true },
@@ -142,20 +143,34 @@ export function usageReport(snapshot, threadId) {
   return out.join('\n');
 }
 
-/** Snapshot for the desktop panel: full structuredContent + a text summary. */
-export function panelToolResult(store, args = {}) {
+/**
+ * Snapshot for the desktop panel: full structuredContent + a text summary.
+ * `currentSessionId` is the session the panel shows in "auto" mode, resolved from (in order) an
+ * explicit `session_id`, the calling thread (`_meta.threadId`), the session the user last typed in
+ * (hook focus, read from the local dashboard) and finally the most recent session.
+ */
+export function panelToolResult(store, args = {}, { threadId = null, focus = null } = {}) {
   const snap = store.snapshot({ limit: 1000 });
-  const id = args.session_id || null;
-  const text = id ? usageReport(snap, id) : usageReport(snap, snap.sessions[0]?.id);
+  const pick = [
+    [args.session_id, 'argument'],
+    [threadId, 'thread'],
+    [focus && focus.sessionId, 'focus'],
+  ].find(([id]) => id && findSession(snap, id));
+  const current = pick ? findSession(snap, pick[0]) : snap.sessions[0] || null;
+  const currentSource = pick ? pick[1] : current ? 'latest' : null;
+  const text = usageReport(snap, args.session_id || current?.id);
   const totals = snap.totals;
   const summary =
     totals.cost === null
       ? `${text}\nPanel totals: cost unknown model (not priced, never $0).`
       : `${text}\nPanel totals: ${totals.all.total} tokens, estimated cost ${totals.costPriced ? '' : '~'}${fmtCost(totals.cost)} USD (OpenAI list prices ${snap.pricing.date}; an estimate, not a bill).`;
-  return { content: [{ type: 'text', text: summary }], structuredContent: snap };
+  return {
+    content: [{ type: 'text', text: summary }],
+    structuredContent: { ...snap, currentSessionId: current ? current.id : null, currentSource },
+  };
 }
 
-export function handleRequest(store, msg, env = process.env) {
+export function handleRequest(store, msg, env = process.env, ctx = {}) {
   const p = msg.params || {};
   switch (msg.method) {
     case 'initialize':
@@ -169,7 +184,7 @@ export function handleRequest(store, msg, env = process.env) {
           // discoverable via tools/list _meta and resources/list alone.
           extensions: { 'io.modelcontextprotocol/ui': {} },
         },
-        serverInfo: { name: 'codex-token-meter', version: '0.3.0' },
+        serverInfo: { name: 'codex-token-meter', version: '0.4.0' },
       };
     case 'ping':
       return {};
@@ -177,7 +192,12 @@ export function handleRequest(store, msg, env = process.env) {
       // token_usage stays first: existing clients/tests read tools[0].
       return { tools: [TOOL, PANEL_TOOL] };
     case 'tools/call': {
-      if (p.name === PANEL_TOOL.name) return panelToolResult(store, p.arguments || {});
+      if (p.name === PANEL_TOOL.name) {
+        return panelToolResult(store, p.arguments || {}, {
+          threadId: p._meta?.threadId || env.CODEX_THREAD_ID || null,
+          focus: ctx.focus || null,
+        });
+      }
       if (p.name !== TOOL.name) throw rpcError(-32602, `unknown tool ${p.name}`);
       // Codex sends the calling thread as _meta.threadId on every MCP tool call.
       const id = p.arguments?.session_id || p._meta?.threadId || env.CODEX_THREAD_ID;
@@ -252,7 +272,33 @@ function rpcError(code, message) {
   return Object.assign(new Error(message), { rpcCode: code });
 }
 
-export function runMcp(store, { input = process.stdin, output = process.stdout } = {}) {
+/** Polls the local dashboard's hook focus (the session the user last typed in); null when it is not running. */
+export function watchFocus(port, onFocus, intervalMs = 2000) {
+  const poll = () => {
+    // /api/state carries `focus` on every dashboard version that has it (older ones lack GET /api/focus).
+    const req = http.get({ host: '127.0.0.1', port, path: '/api/state?limit=1', timeout: 800 }, (res) => {
+      let body = '';
+      res.on('data', (d) => (body += d));
+      res.on('end', () => {
+        try {
+          onFocus(res.statusCode === 200 ? JSON.parse(body).focus || null : null);
+        } catch {
+          onFocus(null);
+        }
+      });
+    });
+    req.on('timeout', () => req.destroy());
+    req.on('error', () => onFocus(null));
+  };
+  poll();
+  const timer = setInterval(poll, intervalMs);
+  timer.unref();
+  return () => clearInterval(timer);
+}
+
+export function runMcp(store, { input = process.stdin, output = process.stdout, env = process.env, port } = {}) {
+  const ctx = { focus: null };
+  const stopFocus = watchFocus(port || Number(env.CODEX_TOKEN_METER_PORT) || 4399, (f) => (ctx.focus = f));
   const rl = readline.createInterface({ input });
   const send = (obj) => output.write(JSON.stringify(obj) + '\n');
   rl.on('line', (line) => {
@@ -265,12 +311,13 @@ export function runMcp(store, { input = process.stdin, output = process.stdout }
     }
     if (msg.id === undefined || msg.id === null) return; // notification
     try {
-      send({ jsonrpc: '2.0', id: msg.id, result: handleRequest(store, msg) });
+      send({ jsonrpc: '2.0', id: msg.id, result: handleRequest(store, msg, env, ctx) });
     } catch (e) {
       send({ jsonrpc: '2.0', id: msg.id, error: { code: e.rpcCode || -32603, message: e.message } });
     }
   });
   rl.on('close', () => {
+    stopFocus();
     store.stop();
     process.exit(0);
   });

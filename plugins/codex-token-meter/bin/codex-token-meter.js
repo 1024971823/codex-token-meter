@@ -263,7 +263,7 @@ switch (opts.cmd) {
   }
   case 'mcp':
     store.start();
-    runMcp(store);
+    runMcp(store, { port: opts.port });
     break;
   case 'tui':
     store.start();
