@@ -10,7 +10,7 @@ import { AntigravityStore, normalizeAntigravityModel } from '../plugins/codex-to
 import { DevinLocalStore, normalizeAnyUsage } from '../plugins/codex-token-meter/src/providers/devin-local.js';
 import { DevinCloudStore } from '../plugins/codex-token-meter/src/providers/devin-cloud.js';
 import { Hub, parseProviders } from '../plugins/codex-token-meter/src/hub.js';
-import { startWeb } from '../plugins/codex-token-meter/src/web.js';
+import { startWeb, redactAccountData } from '../plugins/codex-token-meter/src/web.js';
 import { getModelPricing } from '../plugins/codex-token-meter/src/pricing.js';
 import { encode } from '../plugins/codex-token-meter/src/proto.js';
 
@@ -204,4 +204,39 @@ test('hub: provider list parsing', () => {
   assert.deepEqual(parseProviders('codex,devin'), ['codex', 'devin-local', 'devin-cloud']);
   assert.equal(parseProviders('all').length, 5);
   assert.throws(() => parseProviders('cursor'), /unknown provider/);
+});
+
+test('devin cloud: never sends the key over plain HTTP to a remote host', async () => {
+  let called = false;
+  const store = new DevinCloudStore({ apiKey: 'cog_x', baseUrl: 'http://devin.example.com', fetchImpl: async () => ((called = true), { ok: true, json: async () => ({}) }) });
+  await store.loadOnceAsync();
+  assert.equal(called, false);
+  assert.match(store.state.error, /https/);
+});
+
+test('web: cross-origin state omits Devin cloud sessions', async () => {
+  const hub = new Hub({ providers: ['codex', 'devin-cloud'], codexHome: path.join(HERE, 'fixtures'), sinceHours: 1e7, devin: { apiKey: 'cog_test' }, fetchImpl: fakeDevinApi() });
+  await hub.loadOnce();
+  assert.equal(redactAccountData(hub.snapshot()).sessions.some((s) => s.provider === 'devin-cloud'), false);
+  const server = await startWeb(hub, { port: 0 });
+  const { port } = server.address();
+  const get = async (headers) => (await fetch(`http://127.0.0.1:${port}/api/state`, { headers })).json();
+  assert.ok((await get({})).sessions.some((s) => s.provider === 'devin-cloud'));
+  assert.equal((await get({ origin: 'http://localhost:9999' })).sessions.some((s) => s.provider === 'devin-cloud'), false);
+  server.close();
+  hub.stop();
+});
+
+test('claude: transcripts older than the window are dropped on rescan', () => {
+  const dir = tmp();
+  const proj = path.join(dir, 'projects', 'p');
+  fs.mkdirSync(proj, { recursive: true });
+  const file = path.join(proj, 's1.jsonl');
+  fs.writeFileSync(file, JSON.stringify({ type: 'assistant', sessionId: 's1', requestId: 'r', timestamp: new Date().toISOString(), message: { id: 'm', model: 'claude-opus-4-5', usage: { input_tokens: 1, output_tokens: 2 } } }) + '\n');
+  const store = new ClaudeStore({ roots: [dir], sinceHours: 1 }).loadOnce();
+  assert.equal(store.snapshot().sessions.length, 1);
+  const old = (Date.now() - 2 * 3600 * 1000) / 1000;
+  fs.utimesSync(file, old, old);
+  store.scan();
+  assert.equal(store.snapshot().sessions.length, 0);
 });
