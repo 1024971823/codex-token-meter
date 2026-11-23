@@ -1,7 +1,7 @@
 {
   "name": "codex-token-meter",
-  "version": "0.2.1",
-  "description": "Live token usage and estimated cost per Codex agent and sub-agent (input/output/model) in a terminal TUI and a web dashboard.",
+  "version": "0.3.0",
+  "description": "Live token usage and estimated cost per Codex agent and sub-agent (input/output/model) in a terminal TUI, a web dashboard, and an in-app panel inside Codex Desktop (MCP Extensions entrypoints).",
   "type": "module",
   "bin": {
     "codex-token-meter": "plugins/codex-token-meter/bin/codex-token-meter.js"

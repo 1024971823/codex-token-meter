@@ -1,7 +1,8 @@
 # Codex Token Meter
 
-实时查看 Codex 主 agent 和每个子 agent 的 token 用量和费用估算：输入、缓存输入、输出、推理 token、所用模型、每次请求增量和趋势。提供四种界面：
+实时查看 Codex 主 agent 和每个子 agent 的 token 用量和费用估算：输入、缓存输入、输出、推理 token、所用模型、每次请求增量和趋势。提供五种界面：
 
+- **桌面版内嵌面板**（0.3.0 新增，原型）：Codex 桌面版里的一个小窗口——会话侧边面板或侧边栏入口，数据来自本地 MCP 服务，不走浏览器。见「桌面版内嵌面板」。
 - **悬浮小窗**：约 360×480 的小页面，可置顶浮在 Codex 桌面版 / IDE / 终端上方，**自动跟随你正在使用的 Codex 会话**。
 - **Codex CLI 状态栏**：直接显示在 Codex 终端底部，跟随当前线程（Codex 0.171+ 实验功能）。
 - **终端 TUI**：在另一个终端里运行，按 agent 树实时刷新。
@@ -91,7 +92,7 @@ node plugins/codex-token-meter/bin/codex-token-meter.js both     # 同时启动�
 | `json` | 打印完整 JSON 快照 |
 | `mini` | 打开悬浮小窗（Chrome/Edge 无边框小窗口，地址 `http://127.0.0.1:4399/mini`） |
 | `ensure-web` | 若网页服务未运行，则在后台启动（供 hook 使用）；`--focus` 时从 stdin 读取 hook 输入并切换悬浮窗跟随的会话 |
-| `mcp` | stdio MCP 服务：Codex 状态栏 + `token_usage` 工具（插件自动启动） |
+| `mcp` | stdio MCP 服务：Codex 状态栏 + `token_usage` 工具 + 桌面版内嵌面板（`token_meter_panel`，插件自动启动） |
 
 选项：`--codex-home <dir>`、`--port <n>`（默认 4399）、`--host <addr>`（默认 127.0.0.1）、`--since <小时>`（默认 24）、`--open`、`--all`、`--pricing-file <文件>`（自定义定价，见「费用估算」）。
 
@@ -119,13 +120,37 @@ node plugins/codex-token-meter/bin/codex-token-meter.js mini
 - 下拉框默认“自动跟随当前 Codex 会话”：在哪个 Codex 窗口/会话里发消息，小窗就切到哪个会话；也可以选中某个会话固定显示。
 - 点“置顶”会弹出画中画窗口（Document Picture-in-Picture，Chrome / Edge 116+），始终浮在 Codex 等其他窗口上方，可拖动、缩放；关闭画中画后回到普通页面。
 
-Codex 桌面版和 IDE 扩展目前没有给插件开放嵌入自定义页面的接口，所以用置顶悬浮窗代替嵌入。
+在终端 / IDE 里没有桌面版内嵌面板时，置顶悬浮窗仍是首选的“一直可见”方案（见下一节）。
 
 ### 桌面版内嵌小组件
 
 `token_usage` 工具带有 `openai/outputTemplate` 元数据（MCP App）。在 ChatGPT 桌面版 / Codex Desktop 里，当模型调用 `token_usage`（比如你问“现在用了多少 token”）时，会在会话中内嵌渲染一个实时面板：随调用所在会话定位、每 1.5 秒从本地仪表盘拉取最新数据、仪表盘不在线时回退为调用时的快照并提示。小组件支持 inline / fullscreen / pip 显示模式。
 
 **自动显示（不需要主动问）**：插件的 `UserPromptSubmit` hook 会向模型上下文注入一条指令，让模型每轮回复时自动调用一次 `token_usage`——每条回复里都带一个实时 token 面板。想关掉这个自动注入，把环境变量 `CODEX_TOKEN_METER_NUDGE=0` 设上即可。
+
+### 桌面版内嵌面板（0.3.0 原型）
+
+和上面那个每条回复自动出现的小组件不同，这个面板是你主动从侧边栏或会话里打开的。这是“把插件做成 Codex 软件内部的小窗口”的第一版，基于 OpenAI 的 Plugin Extensions / MCP Extensions（2026-09-29 DevDay 发布）：
+
+- **这是什么**：MCP 服务新增一个 `token_meter_panel` 工具，带两个入口（entrypoint）——`thread`（会话内的内容页 / 侧边面板，离“内部小窗口”最近）和 `global`（桌面版侧边栏入口）。两个入口打开的是同一个紧凑面板（复用悬浮小窗的界面：每 agent 的 token + 费用、会话切换、刷新）。
+- **怎么打开**：在 Codex 桌面版里安装插件后，从侧边栏找到 Token Meter，或在某个会话里打开它的面板（具体入口位置以你那版桌面应用为准；入口由桌面应用按 `_meta["openai/ui"]["entrypoints"]` 渲染）。
+- **数据怎么来**：面板在沙箱里运行，**不联网、不读本地文件、不访问 `http://127.0.0.1:4399`**。所有数据都来自 MCP 工具的 `structuredContent`（整份快照：会话、每 agent 用量与费用、定价日期），面板每 5 秒重新调一次 `token_meter_panel` 刷新。面板里可以切换会话，但注意：打开面板时服务端收不到当前是哪个会话，只能默认显示最新会话，需要你手动在面板下拉框里选。
+- **需要什么**：Codex 桌面版 + 本插件的本地 MCP 服务（插件装好后自动启动）。只读本机 rollout 数据，不上传任何东西。
+
+**诚实的限制（请先读这段）**：
+
+- 这是**原型**，**没有在真实 Codex 桌面版里测试过**——本机没有可装桌面版的环境，只在本地用 `npm test` 验证了入口元数据、UI 资源和工具返回（见 `test/desktop-panel.test.js`）。真实桌面版里入口是否出现、面板是否渲染、刷新是否正常，都需要你在自己的桌面版上手动验证。
+- 按 MCP Extensions 规范，**入口打开的应用一律全屏显示**（`ChatGPT uses fullscreen for all entrypoints`），所以它**不是**一个可以置顶、可以拖来拖去的悬浮窗；它是在 Codex 应用内部打开的一页。想要“一直浮在所有窗口上面”时，仍用悬浮小窗。
+- 不用装任何新依赖：没引入 `@openai/mcp-extensions` SDK——那个 SDK 是给用 `@modelcontextprotocol/sdk` 写的服务准备的包装，本插件的 MCP 服务是手写 stdio JSON-RPC，直接按 MCP Apps 协议实现就够了。
+
+**手动测试步骤（在你的桌面版上）**：
+
+1. 更新插件到 0.3.0（或切到 `feat/desktop-panel` 分支），重启 Codex 桌面版，确认插件已加载。
+2. 在 Codex 桌面版里开一个会话，先发一条消息产生 token 用量。
+3. 找侧边栏的 Token Meter 入口打开面板；再在会话里找面板入口打开一次。确认两种入口都能打开同一张面板。
+4. 面板应显示：总 token、费用估算、输入 / 缓存 / 输出 / 推理四格、主 agent + 子 agent 列表（每个带模型和费用）。
+5. 再发一条消息，5 秒内面板数字应变化；点「刷新」应立即更新；在面板下拉框里切到另一个会话应显示那个会话的数据。
+6. 如果某个入口没出现或面板空白，请把桌面版版本号和当时的表现告诉我（也可能只是该版本的桌面版还没支持 thread/global 入口）。
 
 ### Codex CLI 状态栏
 
@@ -153,3 +178,4 @@ mock 用法：在 `$CODEX_HOME/config.toml` 中配置 `model_provider = "mock"`�
 
 - 费用是按 OpenAI API 定价的估算，不是账单；定价以 <https://platform.openai.com/docs/pricing> 为准，内置定价表见「费用估算」。
 - 只读取本机 rollout 文件；网页服务默认只监听 127.0.0.1。
+- 桌面版内嵌面板是原型，**未在真实 Codex 桌面版里验证过**（见「桌面版内嵌面板」的手动测试步骤）；入口打开的应用按规范是全屏页，不是置顶悬浮窗。

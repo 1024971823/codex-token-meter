@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Token Meter · 桌面版内嵌面板</title>
+<!--
+  MCP App panel for Codex Desktop (Plugin Extensions / MCP Extensions).
+
+  This file is served by the local MCP server as the UI resource
+  `ui://codex-token-meter/panel` (mime `text/html;profile=mcp-app`) and is
+  rendered by the host inside Codex Desktop — sidebar (global entrypoint)
+  or a content tab inside a conversation (thread entrypoint).
+
+  It deliberately makes NO network request: no fetch(), no EventSource, no
+  direct dashboard URL. All data arrives over the MCP Apps bridge
+  (JSON-RPC over postMessage, protocol 2026-01-26):
+    - the host sends `ui/notifications/tool-result` with the panel tool's
+      `structuredContent` (a store snapshot: sessions, totals, pricing);
+    - the panel refreshes by sending `tools/call` for `token_meter_panel`.
+  That is the whole point of the sandbox: the page cannot reach the local
+  dashboard server or the filesystem; the MCP server is the only data source.
+
+  Opened outside a host (e.g. directly in a browser) it shows a short
+  explanation instead of data — there is intentionally no direct fallback.
+-->
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --fg:#e6edf3; --dim:#8b949e; --accent:#58a6ff; --green:#3fb950; --yellow:#d29922; --red:#f85149; --purple:#bc8cff; --cyan:#39c5cf; }
+  [data-theme="light"] { --bg:#ffffff; --panel:#f6f8fa; --border:#d0d7de; --fg:#1f2328; --dim:#656d76; --accent:#0969da; --green:#1a7f37; --yellow:#9a6700; --red:#cf222e; --purple:#8250df; --cyan:#1b7c83; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+  #app { padding:12px 14px; max-width:720px; margin:0 auto; }
+  .bar { display:flex; align-items:center; gap:8px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--red); flex:none; }
+  .dot.on { background:var(--green); box-shadow:0 0 5px var(--green); }
+  select { flex:1; min-width:0; background:var(--panel); color:var(--fg); border:1px solid var(--border); border-radius:6px; font-size:12px; padding:4px 6px; }
+  button { background:var(--panel); color:var(--fg); border:1px solid var(--border); border-radius:6px; font-size:12px; padding:4px 10px; cursor:pointer; white-space:nowrap; }
+  button:hover { border-color:var(--accent); }
+  .title { margin:12px 0 2px; display:flex; gap:8px; align-items:baseline; }
+  .title b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:15px; }
+  .sub { color:var(--dim); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .big { display:flex; align-items:baseline; gap:10px; margin:8px 0 4px; flex-wrap:wrap; }
+  .big .v { font-size:30px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .big .d { color:var(--green); font-variant-numeric:tabular-nums; }
+  .big .cost { color:var(--yellow); font-size:22px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin:8px 0 10px; }
+  .grid > div { background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:6px 8px; }
+  .grid .k { color:var(--dim); font-size:11px; }
+  .grid .n { font-weight:600; font-variant-numeric:tabular-nums; }
+  .agents { border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+  .ag { display:grid; grid-template-columns:1fr auto auto; gap:2px 10px; padding:6px 9px; border-bottom:1px solid var(--border); font-variant-numeric:tabular-nums; }
+  .ag:last-child { border-bottom:none; }
+  .ag .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+  .ag.child .nm { color:var(--cyan); }
+  .ag .tree { color:var(--border); font-family:ui-monospace,monospace; font-weight:400; }
+  .ag .tot { font-weight:600; text-align:right; }
+  .ag .dl { color:var(--green); text-align:right; min-width:48px; }
+  .ag .meta { grid-column:1 / -1; color:var(--dim); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ag .meta .m { color:var(--yellow); }
+  .ag .meta .r { color:var(--purple); }
+  .st { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--dim); margin-right:5px; vertical-align:middle; }
+  .st.running { background:var(--green); }
+  .st.error { background:var(--red); } .st.aborted { background:var(--yellow); }
+  .foot { color:var(--dim); font-size:11px; margin-top:8px; display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+  .empty { color:var(--dim); text-align:center; padding:40px 10px; }
+  .note { color:var(--yellow); font-size:11px; margin-top:8px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="bar">
+    <span class="dot" id="dot" title="MCP Apps 连接"></span>
+    <select id="pick" title="选择要显示的会话"></select>
+    <button id="refresh" type="button" title="重新向 MCP 服务请求最新快照">刷新</button>
+  </div>
+  <div id="body"><div class="empty">正在连接 Codex 桌面版…</div></div>
+  <div class="note" id="note" hidden></div>
+  <div class="foot"><span id="foot-pricing"></span><span id="foot-time"></span></div>
+</div>
+<script>
+'use strict';
+// MCP Apps bridge (JSON-RPC over postMessage, protocol 2026-01-26).
+// Data ONLY comes from tool results. There is no fetch/EventSource here.
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => { n = n || 0; if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B'; if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'; if (n >= 1e4) return (n / 1e3).toFixed(1) + 'k'; return n.toLocaleString('en-US'); };
+const fmtCost = (c) => { if (c === null || c === undefined || Number.isNaN(c)) return '—'; if (c === 0) return '$0.00'; if (c < 0.01) return '$' + c.toFixed(4); if (c < 1) return '$' + c.toFixed(3); return '$' + c.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+const costCell = (c, priced) => (c === null || c === undefined ? '—' : priced ? fmtCost(c) : '~' + fmtCost(c));
+const ago = (ts) => { if (!ts) return '-'; const s = Math.max(0, Math.round((Date.now() - ts) / 1000)); return s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm' : s < 86400 ? Math.floor(s / 3600) + 'h' : Math.floor(s / 86400) + 'd'; };
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+const base = (p) => (p || '').split(/[\\/]/).filter(Boolean).pop() || p || '';
+const contains = (n, id) => n.id === id || n.children.some((c) => contains(c, id));
+const prev = new Map();
+let state = null;          // last structuredContent snapshot
+let choice = 'auto';       // in-memory only: the sandbox may block storage
+let bridgeReady = null;
+let rpcId = 0;
+const pending = new Map();
+
+function send(msg) { window.parent.postMessage({ jsonrpc: '2.0', ...msg }, '*'); }
+function rpcRequest(method, params) {
+  return new Promise((resolve, reject) => {
+    const id = ++rpcId;
+    pending.set(id, { resolve, reject });
+    send({ id, method, params });
+  });
+}
+function rpcNotify(method, params) { send({ method, params }); }
+
+function current() {
+  if (!state || !state.sessions || !state.sessions.length) return { s: null };
+  if (choice !== 'auto') {
+    const s = state.sessions.find((x) => x.id === choice);
+    if (s) return { s, auto: false };
+  }
+  return { s: state.sessions[0], auto: true };
+}
+
+function renderPicker() {
+  const pick = $('pick');
+  const listed = (state.sessions || []).slice(0, 20);
+  const opts = ['<option value="auto">最新会话</option>'].concat(
+    listed.map((s) => `<option value="${esc(s.id)}">${esc(base(s.cwd) || s.id.slice(-8))} · ${esc(s.id.slice(-6))} · ${fmt(s.subtreeUsage.total)}</option>`));
+  pick.innerHTML = opts.join('');
+  pick.value = (state.sessions || []).some((s) => s.id === choice) ? choice : 'auto';
+}
+
+function agentRows(n, prefix, indent, out) {
+  const before = prev.get(n.id);
+  const changed = before !== undefined && before !== n.usage.total;
+  prev.set(n.id, n.usage.total);
+  const isMain = n.depth === 0 && !n.nickname;
+  const ctx = n.contextWindow ? ` · 上下文 ${Math.min(100, Math.round((n.contextUsed || 0) / n.contextWindow * 100))}%` : '';
+  out.push(`<div class="ag ${isMain ? '' : 'child'}">
+    <span class="nm"><span class="tree">${prefix}</span><span class="st ${esc(n.status || '')}"></span>${esc(isMain ? 'main' : n.name)}</span>
+    <span class="dl">${n.last && n.last.total ? '+' + fmt(n.last.total) : ''}</span>
+    <span class="tot">${fmt(n.usage.total)}</span>
+    <span class="meta">${n.role ? `<span class="r">${esc(n.role)}</span> · ` : ''}<span class="m">${esc(n.model || '-')}</span> · in ${fmt(n.usage.input)} / out ${fmt(n.usage.output)} · ${costCell(n.cost, n.costPriced)} · ${n.requests} 次${ctx} · ${ago(n.updatedAt)}</span>
+  </div>`);
+  (n.children || []).forEach((c, i) => {
+    const last = i === n.children.length - 1;
+    agentRows(c, indent + (last ? '└ ' : '├ '), indent + (last ? '  ' : '│ '), out);
+  });
+}
+
+function render() {
+  if (!state) return;
+  renderPicker();
+  const { s } = current();
+  const note = $('note');
+  if (!s) { $('body').innerHTML = '<div class="empty">还没有会话。在 Codex 里发一条消息后这里会实时显示。</div>'; return; }
+  const u = s.subtreeUsage;
+  let delta = 0;
+  (function walk(n) { delta += (n.last && n.last.total) || 0; (n.children || []).forEach(walk); })(s);
+  const rows = [];
+  agentRows(s, '', '', rows);
+  const subCount = (function count(n) { return (n.children || []).reduce((a, c) => a + 1 + count(c), 0); })(s);
+  $('body').innerHTML = `
+    <div class="title"><b title="${esc(s.cwd || '')}">${esc(base(s.cwd) || '会话')}</b></div>
+    <div class="sub">会话 ${esc(s.id)}</div>
+    <div class="big"><span class="v">${fmt(u.total)}</span><span class="d">${delta ? '最近 +' + fmt(delta) : ''}</span><span class="cost">${costCell(s.subtreeCost, s.subtreeCostPriced)}</span></div>
+    <div class="grid">
+      <div><div class="k">输入</div><div class="n">${fmt(u.input)}</div></div>
+      <div><div class="k">缓存</div><div class="n">${fmt(u.cached)}</div></div>
+      <div><div class="k">输出</div><div class="n">${fmt(u.output)}</div></div>
+      <div><div class="k">推理</div><div class="n">${fmt(u.reasoning)}</div></div>
+    </div>
+    <div class="agents">${rows.join('')}</div>
+    <div class="foot"><span>${subCount ? `${subCount} 个子代理 ${fmt(u.total - s.usage.total)}` : '无子代理'}</span><span>${esc(s.model || '')}</span></div>`;
+  const priced = state.totals && state.totals.costPriced === false;
+  note.hidden = !priced;
+  note.textContent = priced ? '注意：有模型不在定价表里，合计带 ~ 前缀，只是已定价部分的合计；未知模型显示 —，绝不报 $0。' : '';
+  $('foot-pricing').textContent = state.pricing ? `费用为估算（OpenAI 定价 ${state.pricing.date}），不是账单。` : '';
+  $('foot-time').textContent = state.generatedAt ? new Date(state.generatedAt).toLocaleTimeString() : '';
+}
+
+function updateFromResponse(response) {
+  // Hosts deliver the tool result as params.structuredContent, or nested
+  // under params.result.structuredContent — accept both.
+  const sc = response && (response.structuredContent || (response.result && response.result.structuredContent));
+  if (sc && sc.sessions) { state = sc; $('dot').classList.add('on'); render(); }
+}
+
+async function refresh() {
+  await bridgeReady;
+  try {
+    const res = await rpcRequest('tools/call', { name: 'token_meter_panel', arguments: {} });
+    updateFromResponse(res);
+  } catch (e) { /* keep last rendered state; dot shows the bridge is up */ }
+}
+
+window.addEventListener('message', (event) => {
+  if (event.source !== window.parent) return;
+  const m = event.data;
+  if (!m || m.jsonrpc !== '2.0') return;
+  if (typeof m.id === 'number') {
+    const p = pending.get(m.id);
+    if (!p) return;
+    pending.delete(m.id);
+    if (m.error) p.reject(m.error); else p.resolve(m.result);
+    return;
+  }
+  if (typeof m.method !== 'string') return;
+  if (m.method === 'ui/notifications/tool-result') updateFromResponse(m.params);
+  if (m.method === 'ui/notifications/host-context-changed') {
+    const theme = m.params && m.params.theme;
+    if (theme === 'light' || theme === 'dark') document.documentElement.setAttribute('data-theme', theme);
+  }
+});
+
+$('pick').addEventListener('change', (e) => { choice = e.target.value; render(); });
+$('refresh').addEventListener('click', () => { refresh(); });
+
+// Outside a host there is no bridge and no data source by design.
+if (window.parent === window) {
+  $('body').innerHTML = '<div class="empty">这是 Codex 桌面版的内嵌面板。<br>请在 Codex 桌面版里从侧边栏或会话面板打开 Token Meter，数据由本地 MCP 服务提供。</div>';
+} else {
+  bridgeReady = (async () => {
+    try {
+      const init = await rpcRequest('ui/initialize', {
+        appInfo: { name: 'token-meter-panel', version: '0.3.0' },
+        appCapabilities: {},
+        protocolVersion: '2026-01-26',
+      });
+      const theme = init && init.hostContext && init.hostContext.theme;
+      if (theme === 'light' || theme === 'dark') document.documentElement.setAttribute('data-theme', theme);
+      rpcNotify('ui/notifications/initialized', {});
+      $('dot').classList.add('on');
+    } catch (e) {
+      $('body').innerHTML = '<div class="empty">没能连上 MCP Apps 桥（ui/initialize 失败）。请在 Codex 桌面版里重新打开本面板。</div>';
+      throw e;
+    }
+  })();
+  // Live-ish refresh: the panel re-calls its tool every 5s while visible.
+  // The initial render comes from the entrypoint's tool result itself.
+  setInterval(() => { if (!document.hidden) refresh(); }, 5000);
+}
+</script>
+</body>
+</html>
