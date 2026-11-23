@@ -162,7 +162,8 @@ export class Hub extends EventEmitter {
       codexHome: this.codexHome,
       pricing: { date: this.pricing.date, source: this.pricing.source, currency: PRICING_CURRENCY },
       providers: this.ids.map((id) => this.detection[id] || { id, name: PROVIDER_META[id].name, surfaces: PROVIDER_META[id].surfaces, state: 'detecting', sessions: 0, roots: [], bins: [], running: [] }),
-      sessions: all.slice(0, limit),
+      // Up to `limit` sessions per provider, so a busy source cannot crowd out the others.
+      sessions: this.ids.flatMap((id) => all.filter((r) => r.provider === id).slice(0, limit)).sort((a, b) => b.lastActive - a.lastActive),
       totals: computeTotals(all, this.pricing),
       byProvider,
     };
