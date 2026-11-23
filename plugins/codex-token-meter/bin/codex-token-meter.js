@@ -163,7 +163,8 @@ function openMini(url) {
   spawn(browser, [`--app=${url}`, '--window-size=380,560', '--window-position=40,80'], { detached: true, stdio: 'ignore' }).unref();
 }
 
-const sameProviders = (h, opts) => [...(h.providers || ['codex'])].sort().join() === [...parseProviders(opts.providers)].sort().join();
+// A running dashboard is reusable when it serves at least the requested providers.
+const sameProviders = (h, opts) => parseProviders(opts.providers).every((id) => (h.providers || ['codex']).includes(id));
 const sameHome = (h, opts) => (!h.codexHome || path.resolve(h.codexHome) === path.resolve(opts.codexHome)) && sameProviders(h, opts);
 
 async function web(store, opts, { quiet = false } = {}) {
