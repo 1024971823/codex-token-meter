@@ -6,7 +6,15 @@
       "source": {
         "source": "local",
         "path": "./plugins/codex-token-meter"
-      }
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
     }
-  ]
+  ],
+  "interface": {
+    "displayName": "Codex Token Meter"
+  }
 }

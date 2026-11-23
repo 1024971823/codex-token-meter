@@ -153,7 +153,7 @@ test('MCP stdio: panel resource and tool work over the real server process', asy
   send({ id: 3, method: 'resources/read', params: { uri: PANEL_URI } });
   send({ id: 4, method: 'tools/call', params: { name: 'token_meter_panel', arguments: {} } });
   send({ id: 5, method: 'tools/call', params: { name: 'token_usage', arguments: { session_id: ROOT } } });
-  assert.equal((await waitFor(1)).result.serverInfo.version, '0.3.0');
+  assert.equal((await waitFor(1)).result.serverInfo.version, '0.4.0');
   const tools = (await waitFor(2)).result.tools;
   assert.deepEqual(tools.map((t) => t.name), ['token_usage', 'token_meter_panel']);
   const panel = (await waitFor(3)).result.contents[0];
@@ -164,4 +164,34 @@ test('MCP stdio: panel resource and tool work over the real server process', asy
   assert.match((await waitFor(5)).result.content[0].text, /Planck \[explorer\]/);
   child.stdin.end();
   await new Promise((r) => child.on('exit', r));
+});
+
+test('panel tool: follows the calling thread, then hook focus, then the latest session', () => {
+  const store = load();
+  const call = (params, env = {}, ctx = {}) =>
+    handleRequest(store, { method: 'tools/call', params: { name: 'token_meter_panel', arguments: {}, ...params } }, env, ctx).structuredContent;
+  const child = store.snapshot({ limit: 1000 }).sessions[0].children[0].id;
+  let sc = call({ _meta: { threadId: child } });
+  assert.equal(sc.currentSessionId, ROOT);
+  assert.equal(sc.currentSource, 'thread');
+  sc = call({}, {}, { focus: { sessionId: ROOT } });
+  assert.equal(sc.currentSource, 'focus');
+  sc = call({ _meta: { threadId: 'nope' } }, {}, { focus: { sessionId: 'nope' } });
+  assert.equal(sc.currentSessionId, ROOT);
+  assert.equal(sc.currentSource, 'latest');
+  sc = call({ arguments: { session_id: ROOT }, _meta: { threadId: 'nope' } });
+  assert.equal(sc.currentSource, 'argument');
+});
+
+test('plugin stays on the .codex-plugin manifest so hooks keep loading (Codex / ChatGPT desktop)', () => {
+  const dir = path.join(HERE, '..', 'plugins', 'codex-token-meter');
+  // A root Agent Plugins plugin.json takes precedence, and Codex 0.171 skips hooks for that format.
+  assert.ok(!fs.existsSync(path.join(dir, 'plugin.json')));
+  const read = (f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+  const manifest = read('.codex-plugin/plugin.json');
+  const pkg = JSON.parse(fs.readFileSync(path.join(HERE, '..', 'package.json'), 'utf8'));
+  assert.equal(manifest.version, pkg.version);
+  assert.equal(manifest.hooks, './hooks.json');
+  assert.equal(manifest.mcpServers, './.mcp.json');
+  assert.ok(read('.mcp.json').mcpServers['token-meter']);
 });

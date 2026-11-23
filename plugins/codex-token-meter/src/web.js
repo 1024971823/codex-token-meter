@@ -65,6 +65,10 @@ export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
       req.on('close', () => clients.delete(res));
       return;
     }
+    if (url.pathname === '/api/focus' && req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      return res.end(JSON.stringify(focus));
+    }
     if (url.pathname === '/api/focus' && req.method === 'POST') {
       // Browsers always send Origin on cross-site POSTs; only the local CLI/hook or our own pages may set focus.
       if (req.headers.origin && !isSameOrigin(req.headers.origin, req.headers.host)) return res.writeHead(403).end('forbidden origin');

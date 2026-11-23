@@ -2,7 +2,7 @@
 
 实时查看 Codex 主 agent 和每个子 agent 的 token 用量和费用估算：输入、缓存输入、输出、推理 token、所用模型、每次请求增量和趋势。提供五种界面：
 
-- **桌面版内嵌面板**（0.3.0 新增，原型）：Codex 桌面版里的一个小窗口——会话侧边面板或侧边栏入口，数据来自本地 MCP 服务，不走浏览器。见「桌面版内嵌面板」。
+- **桌面版内嵌面板**（原型）：Codex 桌面版和 **ChatGPT 桌面版**（Work 模式 / 桌面版里的 Codex）里的一个小窗口——会话旁边的面板或侧边栏入口，自动显示当前对话，数据来自本地 MCP 服务，不走浏览器。见「桌面版内嵌面板」和「在 ChatGPT 桌面版里使用」。
 - **悬浮小窗**：约 360×480 的小页面，可置顶浮在 Codex 桌面版 / IDE / 终端上方，**自动跟随你正在使用的 Codex 会话**。
 - **Codex CLI 状态栏**：直接显示在 Codex 终端底部，跟随当前线程（Codex 0.171+ 实验功能）。
 - **终端 TUI**：在另一个终端里运行，按 agent 树实时刷新。
@@ -134,7 +134,7 @@ node plugins/codex-token-meter/bin/codex-token-meter.js mini
 
 - **这是什么**：MCP 服务新增一个 `token_meter_panel` 工具，带两个入口（entrypoint）——`thread`（会话内的内容页 / 侧边面板，离“内部小窗口”最近）和 `global`（桌面版侧边栏入口）。两个入口打开的是同一个紧凑面板（复用悬浮小窗的界面：每 agent 的 token + 费用、会话切换、刷新）。
 - **怎么打开**：在 Codex 桌面版里安装插件后，从侧边栏找到 Token Meter，或在某个会话里打开它的面板（具体入口位置以你那版桌面应用为准；入口由桌面应用按 `_meta["openai/ui"]["entrypoints"]` 渲染）。
-- **数据怎么来**：面板在沙箱里运行，**不联网、不读本地文件、不访问 `http://127.0.0.1:4399`**。所有数据都来自 MCP 工具的 `structuredContent`（整份快照：会话、每 agent 用量与费用、定价日期），面板每 5 秒重新调一次 `token_meter_panel` 刷新。面板里可以切换会话，但注意：打开面板时服务端收不到当前是哪个会话，只能默认显示最新会话，需要你手动在面板下拉框里选。
+- **数据怎么来**：面板在沙箱里运行，**不联网、不读本地文件、不访问 `http://127.0.0.1:4399`**。所有数据都来自 MCP 工具的 `structuredContent`（整份快照：会话、每 agent 用量与费用、定价日期），面板每 5 秒重新调一次 `token_meter_panel` 刷新。下拉框默认“自动：当前对话”，按这个顺序决定显示哪个会话：① 宿主在工具调用里带的会话 ID（`_meta.threadId`）；② 你最近一次发消息的会话（插件 hook 记录在本地仪表盘里）；③ 最新的会话。面板标题下方会写明用的是哪一种；也可以在下拉框里手动选。
 - **需要什么**：Codex 桌面版 + 本插件的本地 MCP 服务（插件装好后自动启动）。只读本机 rollout 数据，不上传任何东西。
 
 **诚实的限制（请先读这段）**：
@@ -151,6 +151,25 @@ node plugins/codex-token-meter/bin/codex-token-meter.js mini
 4. 面板应显示：总 token、费用估算、输入 / 缓存 / 输出 / 推理四格、主 agent + 子 agent 列表（每个带模型和费用）。
 5. 再发一条消息，5 秒内面板数字应变化；点「刷新」应立即更新；在面板下拉框里切到另一个会话应显示那个会话的数据。
 6. 如果某个入口没出现或面板空白，请把桌面版版本号和当时的表现告诉我（也可能只是该版本的桌面版还没支持 thread/global 入口）。
+
+### 在 ChatGPT 桌面版里使用（0.4.0）
+
+ChatGPT 桌面版和 Codex 共用同一套插件格式，同一个插件不用改就能装。插件清单里声明了 `requires_local_executor`，因为它要在你电脑上运行本地 MCP 服务、读取本机 Codex 会话文件。
+
+1. 把仓库加成插件来源（二选一）：
+   - 命令行：`codex plugin marketplace add /path/to/codex-token-meter`（或 Git 地址）；
+   - 或者把仓库放在项目里，ChatGPT 桌面版会读取 `.agents/plugins/marketplace.json`。
+2. 重启 ChatGPT 桌面版，打开 Plugins Directory，选择 “Codex Token Meter” 来源，安装插件。
+3. 在**本地运行的对话**（Work 模式，或桌面版里的 Codex）里打开 Token Meter 面板：会话旁边的面板入口（`thread`），或侧边栏入口（`global`）。
+4. 面板显示当前对话的总 token、输入 / 缓存 / 输出 / 推理 token、每个 agent 的模型和费用估算，以及子 agent 树，每 5 秒刷新一次。
+
+限制：
+
+- 只能用在本地运行的对话里。本地 MCP 插件只能在 ChatGPT 桌面版安装；普通云端聊天不会在本机写会话文件，文档里也没有给插件读取其 token 用量的接口，所以看不到普通聊天的 token。
+- ChatGPT 只支持 `inline` / `fullscreen` 显示模式，不支持画中画。想让面板一直浮在窗口上方，用「悬浮小窗」。
+- 如果 ChatGPT 打开面板时没有带会话 ID，面板会显示你最近发消息的会话（需要插件 hook 已信任并运行），否则显示最新会话。
+- 插件故意没有改用根目录的 `plugin.json`（Agent Plugins 格式）：实测 Codex 0.171 对这种格式的插件不加载 hook，会丢掉自动启动仪表盘和会话跟随。`.codex-plugin/plugin.json` 仍是官方支持的兼容格式。
+- 尚未在真实的 ChatGPT 桌面版里验证（需要 macOS / Windows 和登录账号）；协议层用 `npm test` 和真实 Codex 0.171 验证过。
 
 ### Codex CLI 状态栏
 
@@ -178,4 +197,4 @@ mock 用法：在 `$CODEX_HOME/config.toml` 中配置 `model_provider = "mock"`�
 
 - 费用是按 OpenAI API 定价的估算，不是账单；定价以 <https://platform.openai.com/docs/pricing> 为准，内置定价表见「费用估算」。
 - 只读取本机 rollout 文件；网页服务默认只监听 127.0.0.1。
-- 桌面版内嵌面板是原型，**未在真实 Codex 桌面版里验证过**（见「桌面版内嵌面板」的手动测试步骤）；入口打开的应用按规范是全屏页，不是置顶悬浮窗。
+- 桌面版内嵌面板是原型，**未在真实 Codex 桌面版 / ChatGPT 桌面版里验证过**（见「桌面版内嵌面板」的手动测试步骤）；入口打开的应用按规范是全屏页，不是置顶悬浮窗。

@@ -1,7 +1,7 @@
 {
   "name": "codex-token-meter",
-  "version": "0.3.0",
-  "description": "Live per-agent token usage (input / cached / output / reasoning) and model for Codex main agents and sub-agents: an in-app panel inside Codex Desktop (thread side panel / sidebar), a floating always-on-top mini window that follows the active session, a Codex CLI statusline, a terminal TUI and a local web dashboard.",
+  "version": "0.4.0",
+  "description": "Live per-agent token usage (input / cached / output / reasoning), model and estimated cost for Codex main agents and sub-agents: an in-app panel beside the conversation in Codex Desktop and the ChatGPT desktop app, a floating always-on-top mini window, a Codex CLI statusline, a terminal TUI and a local web dashboard.",
   "keywords": [
     "tokens",
     "usage",
@@ -13,7 +13,18 @@
   "skills": "./skills",
   "hooks": "./hooks.json",
   "interface": {
-    "displayName": "Codex Token Meter"
+    "displayName": "Codex Token Meter",
+    "shortDescription": "Live token usage, model and cost per agent and sub-agent",
+    "longDescription": "Open the Token Meter panel beside a conversation (Codex Desktop or Work mode / Codex in the ChatGPT desktop app) to see the current session's main agent and sub-agents: input, cached, output and reasoning tokens, model, latest request delta and estimated USD cost, refreshed live from local Codex rollout files.",
+    "developerName": "Srakoul",
+    "category": "Productivity",
+    "capabilities": [
+      "Read"
+    ],
+    "defaultPrompt": [
+      "Show how many tokens each sub-agent used in this session"
+    ]
   },
-  "mcpServers": "./.mcp.json"
+  "mcpServers": "./.mcp.json",
+  "requires_local_executor": true
 }

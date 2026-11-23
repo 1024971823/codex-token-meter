@@ -73,7 +73,7 @@
     <select id="pick" title="选择要显示的会话"></select>
     <button id="refresh" type="button" title="重新向 MCP 服务请求最新快照">刷新</button>
   </div>
-  <div id="body"><div class="empty">正在连接 Codex 桌面版…</div></div>
+  <div id="body"><div class="empty">正在连接 Codex / ChatGPT 桌面版…</div></div>
   <div class="note" id="note" hidden></div>
   <div class="foot"><span id="foot-pricing"></span><span id="foot-time"></span></div>
 </div>
@@ -89,6 +89,7 @@ const ago = (ts) => { if (!ts) return '-'; const s = Math.max(0, Math.round((Dat
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 const base = (p) => (p || '').split(/[\\/]/).filter(Boolean).pop() || p || '';
 const contains = (n, id) => n.id === id || n.children.some((c) => contains(c, id));
+const SOURCE = { argument: '指定会话', thread: '当前对话', focus: '最近发消息的会话', latest: '最新会话' };
 const prev = new Map();
 let state = null;          // last structuredContent snapshot
 let choice = 'auto';       // in-memory only: the sandbox may block storage
@@ -112,13 +113,14 @@ function current() {
     const s = state.sessions.find((x) => x.id === choice);
     if (s) return { s, auto: false };
   }
-  return { s: state.sessions[0], auto: true };
+  const cur = state.currentSessionId && state.sessions.find((x) => x.id === state.currentSessionId);
+  return { s: cur || state.sessions[0], auto: true };
 }
 
 function renderPicker() {
   const pick = $('pick');
   const listed = (state.sessions || []).slice(0, 20);
-  const opts = ['<option value="auto">最新会话</option>'].concat(
+  const opts = ['<option value="auto">自动：当前对话</option>'].concat(
     listed.map((s) => `<option value="${esc(s.id)}">${esc(base(s.cwd) || s.id.slice(-8))} · ${esc(s.id.slice(-6))} · ${fmt(s.subtreeUsage.total)}</option>`));
   pick.innerHTML = opts.join('');
   pick.value = (state.sessions || []).some((s) => s.id === choice) ? choice : 'auto';
@@ -145,7 +147,7 @@ function agentRows(n, prefix, indent, out) {
 function render() {
   if (!state) return;
   renderPicker();
-  const { s } = current();
+  const { s, auto } = current();
   const note = $('note');
   if (!s) { $('body').innerHTML = '<div class="empty">还没有会话。在 Codex 里发一条消息后这里会实时显示。</div>'; return; }
   const u = s.subtreeUsage;
@@ -156,7 +158,7 @@ function render() {
   const subCount = (function count(n) { return (n.children || []).reduce((a, c) => a + 1 + count(c), 0); })(s);
   $('body').innerHTML = `
     <div class="title"><b title="${esc(s.cwd || '')}">${esc(base(s.cwd) || '会话')}</b></div>
-    <div class="sub">会话 ${esc(s.id)}</div>
+    <div class="sub">${auto ? `<span class="m">${esc(SOURCE[state.currentSource] || '最新会话')}</span> · ` : ''}会话 ${esc(s.id)}</div>
     <div class="big"><span class="v">${fmt(u.total)}</span><span class="d">${delta ? '最近 +' + fmt(delta) : ''}</span><span class="cost">${costCell(s.subtreeCost, s.subtreeCostPriced)}</span></div>
     <div class="grid">
       <div><div class="k">输入</div><div class="n">${fmt(u.input)}</div></div>
@@ -212,12 +214,12 @@ $('refresh').addEventListener('click', () => { refresh(); });
 
 // Outside a host there is no bridge and no data source by design.
 if (window.parent === window) {
-  $('body').innerHTML = '<div class="empty">这是 Codex 桌面版的内嵌面板。<br>请在 Codex 桌面版里从侧边栏或会话面板打开 Token Meter，数据由本地 MCP 服务提供。</div>';
+  $('body').innerHTML = '<div class="empty">这是 Codex / ChatGPT 桌面版的内嵌面板。<br>请在 Codex / ChatGPT 桌面版里从侧边栏或会话面板打开 Token Meter，数据由本地 MCP 服务提供。</div>';
 } else {
   bridgeReady = (async () => {
     try {
       const init = await rpcRequest('ui/initialize', {
-        appInfo: { name: 'token-meter-panel', version: '0.3.0' },
+        appInfo: { name: 'token-meter-panel', version: '0.4.0' },
         appCapabilities: {},
         protocolVersion: '2026-01-26',
       });
@@ -226,7 +228,7 @@ if (window.parent === window) {
       rpcNotify('ui/notifications/initialized', {});
       $('dot').classList.add('on');
     } catch (e) {
-      $('body').innerHTML = '<div class="empty">没能连上 MCP Apps 桥（ui/initialize 失败）。请在 Codex 桌面版里重新打开本面板。</div>';
+      $('body').innerHTML = '<div class="empty">没能连上 MCP Apps 桥（ui/initialize 失败）。请在 Codex / ChatGPT 桌面版里重新打开本面板。</div>';
       throw e;
     }
   })();
