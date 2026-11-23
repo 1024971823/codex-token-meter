@@ -25,7 +25,9 @@ const approx = (a, b, eps = 1e-9) => Math.abs(a - b) < eps;
 test('panel tool: thread + global entrypoints on one UI resource, token_usage still first', () => {
   const tools = handleRequest(load(), { method: 'tools/list' }).tools;
   assert.equal(tools[0].name, 'token_usage');
-  assert.deepEqual(tools[0]._meta['openai/ui'].entrypoints, [{ type: 'statusline', resourceUri: STATUSLINE_URI }]);
+  assert.equal(tools[0]._meta['openai/ui'], undefined);
+  const statusline = tools.find((t) => t.name === 'token_meter_statusline');
+  assert.deepEqual(statusline._meta['openai/ui'].entrypoints, [{ type: 'statusline', resourceUri: STATUSLINE_URI }]);
   const panel = tools.find((t) => t.name === 'token_meter_panel');
   assert.equal(panel, PANEL_TOOL);
   // Title must describe the view, not repeat the plugin name (spec guidance).
@@ -155,7 +157,7 @@ test('MCP stdio: panel resource and tool work over the real server process', asy
   send({ id: 5, method: 'tools/call', params: { name: 'token_usage', arguments: { session_id: ROOT } } });
   assert.equal((await waitFor(1)).result.serverInfo.version, '0.4.0');
   const tools = (await waitFor(2)).result.tools;
-  assert.deepEqual(tools.map((t) => t.name), ['token_usage', 'token_meter_panel']);
+  assert.deepEqual(tools.map((t) => t.name), ['token_usage', 'token_meter_panel', 'token_meter_statusline']);
   const panel = (await waitFor(3)).result.contents[0];
   assert.equal(panel.mimeType, 'text/html;profile=mcp-app');
   assert.match(panel.text, /ui\/initialize/);

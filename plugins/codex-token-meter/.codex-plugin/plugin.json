@@ -1,6 +1,6 @@
 {
   "name": "codex-token-meter",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Live per-agent token usage (input / cached / output / reasoning), model and estimated cost for Codex main agents and sub-agents: an in-app panel beside the conversation in Codex Desktop and the ChatGPT desktop app, a floating always-on-top mini window, a Codex CLI statusline, a terminal TUI and a local web dashboard.",
   "keywords": [
     "tokens",

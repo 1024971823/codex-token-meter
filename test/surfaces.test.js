@@ -35,7 +35,10 @@ test('token_usage uses the calling thread and never substitutes another session'
 test('MCP server advertises a statusline entrypoint and reads it for the requested thread', async () => {
   const store = load();
   const tools = handleRequest(store, { method: 'tools/list' }).tools;
-  assert.deepEqual(tools[0]._meta['openai/ui'].entrypoints, [{ type: 'statusline', resourceUri: STATUSLINE_URI }]);
+  assert.equal(tools[0]._meta['openai/ui'], undefined);
+  const statuslineTool = tools.find((t) => t.name === 'token_meter_statusline');
+  assert.ok(statuslineTool);
+  assert.deepEqual(statuslineTool._meta['openai/ui'].entrypoints, [{ type: 'statusline', resourceUri: STATUSLINE_URI }]);
   assert.equal(tools[0]._meta['openai/outputTemplate'], WIDGET_URI);
 
   const child = spawn(process.execPath, [BIN, 'mcp', '--codex-home', HOME, '--since', '1e7'], { stdio: ['pipe', 'pipe', 'inherit'] });

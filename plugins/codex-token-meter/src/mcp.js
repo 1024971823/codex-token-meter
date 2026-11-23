@@ -57,12 +57,32 @@ const TOOL = {
     'openai/outputTemplate': WIDGET_URI,
     'openai/widgetDescription': 'Live per-agent token usage and estimated cost for a Codex session.',
     ui: { resourceUri: WIDGET_URI },
-    'openai/ui': {
-      resourceUri: WIDGET_URI,
-      availableDisplayModes: ['inline', 'fullscreen', 'pip'],
-      preferredDisplayMode: 'inline',
-      entrypoints: [{ type: 'statusline', resourceUri: STATUSLINE_URI }],
-    },
+    // No openai/ui here: the desktop validates it with a strict schema
+    // ({entrypoints, preferredModelDisplayMode} only, entrypoint types
+    // file|global|thread|deepLink|settings). Widget rendering only needs
+    // openai/outputTemplate; the statusline entrypoint lives on its own tool.
+  },
+};
+
+// The Codex CLI statusline is discovered via a {type:'statusline'} entrypoint in
+// _meta["openai/ui"].entrypoints. Desktop rejects that type under its strict
+// schema, so it lives on this dedicated tool — the desktop drops only this
+// tool's UI metadata, leaving the widget (token_usage) and the panel entrypoints
+// (token_meter_panel) intact.
+export const STATUSLINE_TOOL = {
+  name: 'token_meter_statusline',
+  title: 'Token Meter Statusline',
+  description:
+    'Codex statusline provider: live token usage and estimated cost of the current session for the footer. Same data as token_usage.',
+  inputSchema: {
+    type: 'object',
+    properties: { session_id: { type: 'string', description: 'Codex thread/session id (optional).' } },
+    additionalProperties: false,
+  },
+  annotations: { readOnlyHint: true },
+  _meta: {
+    ui: { resourceUri: STATUSLINE_URI },
+    'openai/ui': { entrypoints: [{ type: 'statusline', resourceUri: STATUSLINE_URI }] },
   },
 };
 
@@ -190,7 +210,7 @@ export function handleRequest(store, msg, env = process.env, ctx = {}) {
       return {};
     case 'tools/list':
       // token_usage stays first: existing clients/tests read tools[0].
-      return { tools: [TOOL, PANEL_TOOL] };
+      return { tools: [TOOL, PANEL_TOOL, STATUSLINE_TOOL] };
     case 'tools/call': {
       if (p.name === PANEL_TOOL.name) {
         return panelToolResult(store, p.arguments || {}, {
@@ -198,7 +218,8 @@ export function handleRequest(store, msg, env = process.env, ctx = {}) {
           focus: ctx.focus || null,
         });
       }
-      if (p.name !== TOOL.name) throw rpcError(-32602, `unknown tool ${p.name}`);
+      if (p.name !== TOOL.name && p.name !== STATUSLINE_TOOL.name)
+        throw rpcError(-32602, `unknown tool ${p.name}`);
       // Codex sends the calling thread as _meta.threadId on every MCP tool call.
       const id = p.arguments?.session_id || p._meta?.threadId || env.CODEX_THREAD_ID;
       const snap = store.snapshot({ limit: 1000 });
