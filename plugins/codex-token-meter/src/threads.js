@@ -40,6 +40,7 @@ export function newThread(id, file) {
     acus: null,
     url: null,
     title: null,
+    originator: null,
   };
 }
 
@@ -251,6 +252,7 @@ export class ThreadStore extends EventEmitter {
         role: t.role,
         depth: t.depth,
         source: t.source.kind + (t.source.subKind ? `:${t.source.subKind}` : ''),
+        originator: t.originator,
         model: t.model,
         effort: t.effort,
         modelProvider: t.provider,

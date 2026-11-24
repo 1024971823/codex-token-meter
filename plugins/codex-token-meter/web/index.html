@@ -225,7 +225,7 @@ function render() {
     const count = (n) => n.children.reduce((a, c) => a + 1 + count(c), 0);
     return `<div class="session">
       <div class="session-head">${s.provider && state.providers ? `<span class="badge ${esc(s.provider)}">${esc(PNAME[s.provider] || s.provider)}</span>` : ''}<span class="title">${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title || s.id)}</a>` : esc(s.title || s.cwd || s.id)}</span>
-        <span class="meta">${s.title && s.cwd ? esc(s.cwd) + ' · ' : ''}会话 ${esc(s.id)} · ${esc(s.source)} · 开始于 ${s.startedAt ? new Date(s.startedAt).toLocaleString() : '-'}</span></div>
+        <span class="meta">${s.title && s.cwd ? esc(s.cwd) + ' · ' : ''}会话 ${esc(s.id)} · ${esc(s.source)}${s.originator ? ' · ' + esc(s.originator) : ''} · 开始于 ${s.startedAt ? new Date(s.startedAt).toLocaleString() : '-'}</span></div>
       <table><thead><tr><th>Agent</th><th>角色</th><th>模型</th><th>状态</th><th>输入</th><th>缓存</th><th>输出</th><th>推理</th><th>总计</th><th>费用</th><th>本次</th><th>请求</th><th>上下文</th><th>趋势</th><th>更新</th></tr></thead>
       <tbody>${rows(s, '', '')}</tbody></table>
       ${s.children.length ? `<div class="foot">${count(s)} 个子代理共 ${fmt(subTotal)} tokens · 会话合计 ${fmt(s.subtreeUsage.total)} tokens · 费用约 ${nodeCost(s, true)}</div>` : `<div class="foot">会话费用约 ${nodeCost(s, true)}</div>`}

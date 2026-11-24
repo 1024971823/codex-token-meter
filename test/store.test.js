@@ -129,3 +129,15 @@ test('finds recently resumed rollouts in old date directories', () => {
   const snap = new RolloutStore({ codexHome: home }).loadOnce().snapshot();
   assert.deepEqual(snap.sessions.map((s) => s.id), ['resumed']);
 });
+
+test('session_meta originator is exposed so desktop sessions are identifiable', () => {
+  const { home, day } = tmpHome();
+  fs.writeFileSync(
+    path.join(day, 'rollout-2026-11-21T00-00-00-desk.jsonl'),
+    line('session_meta', { id: 'desk', source: 'vscode', originator: 'Codex Desktop' }) +
+      line('event_msg', { type: 'token_count', info: { total_token_usage: usage(10, 1), last_token_usage: usage(10, 1) } }),
+  );
+  const n = new RolloutStore({ codexHome: home }).loadOnce().snapshot().sessions[0];
+  assert.equal(n.originator, 'Codex Desktop');
+  assert.equal(n.source, 'vscode');
+});

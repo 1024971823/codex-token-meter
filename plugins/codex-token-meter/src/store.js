@@ -146,6 +146,7 @@ export class RolloutStore extends ThreadStore {
       t.source = src;
       t.cwd = payload.cwd || null;
       t.provider = payload.model_provider || null;
+      t.originator = payload.originator || null;
       t.historyStart = payload.subagent_history_start_ordinal ?? null;
       t.startedAt = Date.parse(payload.timestamp || rec.timestamp) || ts;
       t.updatedAt = ts;

@@ -123,6 +123,58 @@ test('devin local: tolerant session-folder reader sums usage and ACUs once', () 
   assert.deepEqual(normalizeAnyUsage({ prompt_tokens: 50, completion_tokens: 7, prompt_tokens_details: { cached_tokens: 20 } }), { input: 50, cached: 20, cacheWrite: 0, output: 7, reasoning: 0, total: 57 });
 });
 
+async function writeDevinSessionsDb(file) {
+  const SQL = await require('sql.js')();
+  const db = new SQL.Database();
+  db.run(`CREATE TABLE sessions (id TEXT, working_directory TEXT, backend_type TEXT, model TEXT, agent_mode TEXT,
+      created_at INTEGER, last_activity_at INTEGER, title TEXT, main_chain_id TEXT, shell_last_seen_index INTEGER,
+      cogs_json TEXT, workspace_dirs TEXT, hidden INTEGER, metadata TEXT);
+    CREATE TABLE message_nodes (row_id INTEGER PRIMARY KEY, session_id TEXT, node_id TEXT, parent_node_id TEXT,
+      chat_message TEXT, created_at INTEGER, metadata TEXT);`);
+  const now = Math.floor(Date.now() / 1000);
+  db.run(`INSERT INTO sessions VALUES ('sess-1','/work','windsurf','swe-2-high','bypass',?,?, '测试会话',NULL,NULL,NULL,NULL,0,?)`, [
+    now - 3600,
+    now - 10,
+    JSON.stringify({ total_acu_cost: 1.5, total_credit_cost: 0 }),
+  ]);
+  db.run(`INSERT INTO sessions VALUES ('hidden-1','/work','windsurf','swe-2-high','bypass',?,?, 'x',NULL,NULL,NULL,NULL,1,'{}')`, [now - 100, now - 5]);
+  const msg = (role) => JSON.stringify({ message_id: 'm', role, content: 'x' });
+  const md = (n) => JSON.stringify({ num_tokens_preceding: n });
+  const ins = db.prepare('INSERT INTO message_nodes (session_id,node_id,chat_message,metadata) VALUES (?,?,?,?)');
+  ins.run(['sess-1', 'n1', msg('user'), md(1000)]);
+  ins.run(['sess-1', 'n2', msg('assistant'), md(1300)]);
+  ins.run(['sess-1', 'n3', msg('user'), md(1600)]);
+  ins.run(['sess-1', 'n4', msg('assistant'), md(2100)]);
+  ins.run(['sess-1', 'n5', msg('assistant'), null]);
+  ins.free();
+  fs.writeFileSync(file, Buffer.from(db.export()));
+  db.close();
+}
+
+test('devin local: sessions.db yields desktop sessions, context-delta usage and ACU', async () => {
+  const dir = tmp();
+  fs.mkdirSync(path.join(dir, 'cli'), { recursive: true });
+  await writeDevinSessionsDb(path.join(dir, 'cli', 'sessions.db'));
+  const store = new DevinLocalStore({ roots: [dir], sinceHours: 72 });
+  await store.loadOnceAsync();
+  const sessions = store.snapshot().sessions;
+  assert.equal(sessions.length, 1); // hidden session filtered out
+  const s = sessions[0];
+  assert.equal(s.provider, 'devin-local');
+  assert.equal(s.title, '测试会话');
+  assert.equal(s.model, 'swe-2-high');
+  assert.equal(s.source, 'desktop:windsurf');
+  assert.equal(s.status, 'running');
+  assert.equal(s.acus, 1.5);
+  assert.equal(s.contextUsed, 2100);
+  // n1's position = all context before it (input); each positive delta is the
+  // previous node's size, split by its role; n5 has no position -> text estimate.
+  const tail = Math.ceil(Buffer.byteLength(JSON.stringify({ message_id: 'm', role: 'assistant', content: 'x' })) / 4);
+  assert.deepEqual(s.usage, { input: 1000 + 300 + 500 + tail, cached: 0, cacheWrite: 0, output: 300, reasoning: 0, total: 2100 + tail });
+  assert.equal(s.requests, 3);
+  store.stop();
+});
+
 function fakeDevinApi(calls = []) {
   const now = Math.floor(Date.now() / 1000);
   return async (url, init) => {

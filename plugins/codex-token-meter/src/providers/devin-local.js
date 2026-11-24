@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ThreadStore, newThread, walkFiles } from '../threads.js';
+import { openReadOnly } from '../sqlite.js';
 
 export function devinDataRoots(env = process.env) {
   if (env.DEVIN_DATA_DIR) return env.DEVIN_DATA_DIR.split(',').map((d) => path.resolve(d.trim())).filter(Boolean);
@@ -57,6 +58,8 @@ export class DevinLocalStore extends ThreadStore {
     this.roots_ = roots;
     this.scanMs = scanMs;
     this.sigs = new Map();
+    this.dbSigs = new Map();
+    this.dbBusy = null;
   }
 
   start() {
@@ -65,8 +68,158 @@ export class DevinLocalStore extends ThreadStore {
     return this;
   }
 
+  /** sessions.db files under the data roots — the Devin CLI / Desktop (Windsurf)
+   * agent keeps its session index in SQLite, not meta.json folders. */
+  sessionDbs() {
+    const out = [];
+    for (const root of this.roots_) {
+      for (const f of walkFiles(root, /^sessions\.db$/, { maxDepth: 3 })) {
+        if (!f.includes('/_versions/')) out.push(f);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Reads Devin Desktop/CLI sessions.db. Token usage is not stored per request;
+   * message_nodes.metadata.num_tokens_preceding records each node's position in
+   * the context window, so node sizes are deltas between consecutive positions
+   * (negative after compaction → re-baseline). Assistant-node deltas count as
+   * output, everything else as input. ACU comes from sessions.metadata.
+   */
+  async refreshSessionsDb(dbFile) {
+    let st;
+    try {
+      st = fs.statSync(dbFile);
+    } catch {
+      return false;
+    }
+    const sig = `${st.size}:${st.mtimeMs}`;
+    if (this.dbSigs.get(dbFile) === sig) return false;
+    this.dbSigs.set(dbFile, sig);
+    const db = await openReadOnly(dbFile);
+    if (!db) return false;
+    try {
+      if (!db.all("select name from sqlite_master where type='table' and name='sessions'").length) return false;
+      const cutoff = Date.now() - this.sinceMs;
+      const toMs = (v) => (typeof v === 'number' ? (v < 1e12 ? v * 1000 : v) : Date.parse(v) || null);
+      const sessions = db
+        .all('select id, working_directory, backend_type, model, agent_mode, created_at, last_activity_at, title, hidden, metadata from sessions')
+        .filter((s) => !s.hidden && (toMs(s.last_activity_at) || 0) >= cutoff);
+      if (!sessions.length) return false;
+      const nodes = db.all(
+        "select row_id, session_id, metadata, instr(substr(chat_message,1,200),'\"role\":\"assistant\"') as asst, length(chat_message) as bytes from message_nodes order by row_id",
+      );
+      const bySess = new Map();
+      for (const n of nodes) {
+        if (!bySess.has(n.session_id)) bySess.set(n.session_id, []);
+        bySess.get(n.session_id).push(n);
+      }
+      let changed = false;
+      const live = new Set();
+      for (const s of sessions) {
+        const id = `db:${s.id}`;
+        live.add(id);
+        const t = this.threads.get(id) || newThread(id, dbFile);
+        t.sessionId = s.id;
+        t.title = s.title || null;
+        t.nickname = t.title;
+        t.cwd = s.working_directory || null;
+        t.model = s.model || null;
+        t.depth = 0;
+        const bt = String(s.backend_type || '').toLowerCase();
+        t.source = { kind: bt === 'cli' || bt === 'terminal' ? 'cli' : 'desktop', subKind: bt || null };
+        t.startedAt = toMs(s.created_at) || null;
+        t.updatedAt = toMs(s.last_activity_at) || t.startedAt;
+        try {
+          const meta = JSON.parse(s.metadata || '{}');
+          if (typeof meta.total_acu_cost === 'number') t.acus = meta.total_acu_cost;
+        } catch {}
+        // num_tokens_preceding marks a node's position in the context window.
+        // Only positioned nodes carry it; the delta between consecutive positions
+        // already covers any unpositioned nodes in between, so only positioned
+        // rows are summed: first position = all earlier context, each positive
+        // delta = tokens appended by the previous positioned node (its role
+        // decides input vs output). A drop means compaction rewound the
+        // position — re-baseline without counting.
+        const usage = { input: 0, cached: 0, cacheWrite: 0, output: 0, reasoning: 0, total: 0 };
+        let maxCtx = 0;
+        let requests = 0;
+        let prev = null;
+        let trailingBytes = 0;
+        for (const n of bySess.get(s.id) || []) {
+          let ctx = null;
+          try {
+            ctx = JSON.parse(n.metadata || '{}').num_tokens_preceding ?? null;
+          } catch {}
+          const asst = !!n.asst;
+          if (asst) requests += 1;
+          if (ctx == null) {
+            trailingBytes += n.bytes || 0;
+            continue;
+          }
+          maxCtx = Math.max(maxCtx, ctx);
+          if (prev == null) {
+            usage.input += ctx;
+            usage.total += ctx;
+          } else if (ctx > prev.ctx) {
+            const size = ctx - prev.ctx;
+            usage[prev.asst ? 'output' : 'input'] += size;
+            usage.total += size;
+          }
+          prev = { ctx, asst };
+          trailingBytes = 0;
+        }
+        // Unpositioned tail after the last positioned node: rough text estimate.
+        if (trailingBytes) {
+          const size = Math.ceil(trailingBytes / 4);
+          usage.input += size;
+          usage.total += size;
+        }
+        t.lastContextTokens = maxCtx;
+        t.status = Date.now() - (t.updatedAt || 0) < 60000 ? 'running' : 'done';
+        this.applyTotals(t, usage, { ...usage, input: 0, cached: 0, cacheWrite: 0, reasoning: 0, total: usage.output }, t.updatedAt || Date.now());
+        t.requests = requests; // applyTotals bumps requests itself; overwrite with the real assistant-node count
+        this.threads.set(id, t);
+        changed = true;
+      }
+      for (const id of [...this.threads.keys()]) {
+        if (id.startsWith('db:') && !live.has(id)) {
+          this.threads.delete(id);
+          changed = true;
+        }
+      }
+      return changed;
+    } finally {
+      db.close();
+    }
+  }
+
+  refreshSessionsDbs() {
+    if (!this.dbBusy) {
+      this.dbBusy = (async () => {
+        try {
+          let changed = false;
+          for (const f of this.sessionDbs()) changed = (await this.refreshSessionsDb(f)) || changed;
+          if (changed) this.bump();
+        } catch {
+          // unreadable/corrupt db: folder scan still runs; next tick retries
+        } finally {
+          this.dbBusy = null;
+        }
+      })();
+    }
+    return this.dbBusy;
+  }
+
   loadOnce() {
     this.refresh();
+    return this;
+  }
+
+  async loadOnceAsync() {
+    this.loadOnce();
+    await this.refreshSessionsDbs();
     return this;
   }
 
@@ -91,6 +244,7 @@ export class DevinLocalStore extends ThreadStore {
   }
 
   refresh() {
+    this.refreshSessionsDbs(); // async; bumps on its own when threads change
     let changed = false;
     const live = new Set();
     for (const dir of this.sessionDirs()) {
