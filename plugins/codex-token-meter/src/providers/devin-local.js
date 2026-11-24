@@ -110,9 +110,8 @@ export class DevinLocalStore extends ThreadStore {
     }
     const sig = `${st.size}:${st.mtimeMs}`;
     if (this.dbSigs.get(dbFile) === sig) return false;
-    this.dbSigs.set(dbFile, sig);
     const db = await openReadOnly(dbFile);
-    if (!db) return false;
+    if (!db) return false; // don't cache sig: retry when a backend shows up
     try {
       if (!db.all("select name from sqlite_master where type='table' and name='sessions'").length) return false;
       const cutoff = Date.now() - this.sinceMs;
@@ -121,6 +120,7 @@ export class DevinLocalStore extends ThreadStore {
         .all('select id, working_directory, backend_type, model, agent_mode, created_at, last_activity_at, title, hidden, metadata from sessions')
         .filter((s) => !s.hidden && (toMs(s.last_activity_at) || 0) >= cutoff);
       if (!sessions.length) return false;
+      this.dbSigs.set(dbFile, sig); // cache only after the file parsed
       const nodes = db.all(
         "select row_id, session_id, metadata, instr(substr(chat_message,1,200),'\"role\":\"assistant\"') as asst, length(chat_message) as bytes from message_nodes order by row_id",
       );
@@ -134,6 +134,11 @@ export class DevinLocalStore extends ThreadStore {
       for (const s of sessions) {
         const id = `db:${s.id}`;
         live.add(id);
+        const acpId = `acp:${s.id}`;
+        if (this.threads.has(acpId)) {
+          this.threads.delete(acpId); // sessions.db supersedes the acp stub for the same slug
+          changed = true;
+        }
         const t = this.threads.get(id) || newThread(id, dbFile);
         t.sessionId = s.id;
         t.title = s.title || null;
@@ -253,59 +258,61 @@ export class DevinLocalStore extends ThreadStore {
         try {
           st = fs.statSync(dbFile);
         } catch {
-          continue; // index entry without a message store
+          st = null; // index entry without a message store
         }
         const ann = annotations[`devin-acp/${backend}/${slugPath}`] || {};
-        if (ann.empty) continue;
-        const sig = `${dbFile}:${st.size}:${st.mtimeMs}:${info.lastUpdated || 0}`;
+        if (ann.archived) continue;
         const id = `acp:${slug}`;
-        live.add(id);
-        const db = await openReadOnly(dbFile);
-        if (!db) continue;
-        try {
-          let meta = {};
-          const counts = {};
-          let title = null;
-          try {
-            for (const r of db.all('select kind, count(*) as c from messages group by kind')) counts[r.kind] = r.c;
-          } catch {}
-          try {
-            meta = Object.fromEntries(db.all('select key, value from meta'));
-          } catch {}
-          if (!Number(meta.message_count) && !Object.values(counts).some(Boolean)) continue; // empty store
-          try {
-            const u = db.all("select payload from messages where kind='user_message' order by position limit 1")[0];
-            if (u) {
-              const p = JSON.parse(u.payload);
-              const texts = (p.content || []).map((c) => c?.content?.text).filter(Boolean);
-              title = texts.join(' ').slice(0, 80) || null;
+        const counts = {};
+        let title = null;
+        let meta = {};
+        if (st && !ann.empty) {
+          const db = await openReadOnly(dbFile);
+          if (db) {
+            try {
+              try {
+                for (const r of db.all('select kind, count(*) as c from messages group by kind')) counts[r.kind] = r.c;
+              } catch {}
+              try {
+                meta = Object.fromEntries(db.all('select key, value from meta'));
+              } catch {}
+              try {
+                const u = db.all("select payload from messages where kind='user_message' order by position limit 1")[0];
+                if (u) {
+                  const p = JSON.parse(u.payload);
+                  const texts = (p.content || []).map((c) => c?.content?.text).filter(Boolean);
+                  title = texts.join(' ').slice(0, 80) || null;
+                }
+              } catch {}
+            } finally {
+              db.close();
             }
-          } catch {}
-          let lastMs = Number(info.lastUpdated) || 0;
-          try {
-            const skel = JSON.parse(meta.history_skeleton || '{}');
-            for (const it of skel.items || []) if (it.created_at_ms > lastMs) lastMs = it.created_at_ms;
-          } catch {}
-          const updatedMs = Math.max(lastMs, st.mtimeMs) || 0;
-          if (updatedMs < cutoff) continue;
-          const t = this.threads.get(id) || newThread(id, dbFile);
-          t.sessionId = slug;
-          t.title = title || slug;
-          t.nickname = t.title;
-          t.cwd = null;
-          t.depth = 0;
-          t.source = { kind: 'desktop', subKind: backend };
-          t.startedAt = null;
-          t.updatedAt = updatedMs || null;
-          t.requests = (counts.agent_message || 0) + (counts.tool_call || 0);
-          t.status = Date.now() - (t.updatedAt || 0) < 60000 ? 'running' : 'done';
-          this.threads.set(id, t);
-          if (this.dbSigs.get(id) !== sig) {
-            this.dbSigs.set(id, sig);
-            changed = true;
           }
-        } finally {
-          db.close();
+        }
+        let lastMs = Number(info.lastUpdated) || 0;
+        try {
+          const skel = JSON.parse(meta.history_skeleton || '{}');
+          for (const it of skel.items || []) if (it.created_at_ms > lastMs) lastMs = it.created_at_ms;
+        } catch {}
+        const updatedMs = Math.max(lastMs, st?.mtimeMs || 0) || 0;
+        if (updatedMs < cutoff) continue;
+        live.add(id);
+        const sig = `${dbFile}:${st?.size || 0}:${st?.mtimeMs || 0}:${info.lastUpdated || 0}`;
+        const t = this.threads.get(id) || newThread(id, dbFile);
+        t.sessionId = slug;
+        t.title = title || slug;
+        t.nickname = t.title;
+        t.cwd = null;
+        t.depth = 0;
+        t.source = { kind: 'desktop', subKind: backend };
+        t.startedAt = null;
+        t.updatedAt = updatedMs || null;
+        t.requests = (counts.agent_message || 0) + (counts.tool_call || 0);
+        t.status = Date.now() - (t.updatedAt || 0) < 60000 ? 'running' : 'done';
+        this.threads.set(id, t);
+        if (this.dbSigs.get(id) !== sig) {
+          this.dbSigs.set(id, sig);
+          changed = true;
         }
       }
     }
@@ -434,7 +441,8 @@ export class DevinLocalStore extends ThreadStore {
       changed = true;
     }
     for (const id of [...this.threads.keys()]) {
-      if (!live.has(id)) {
+      // db:/acp: threads are owned by refreshSessionsDbs, not the folder scan
+      if (!live.has(id) && !id.startsWith('db:') && !id.startsWith('acp:')) {
         this.threads.delete(id);
         changed = true;
       }
