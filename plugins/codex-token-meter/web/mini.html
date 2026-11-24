@@ -46,6 +46,15 @@
   .foot { color:var(--dim); font-size:10px; margin-top:6px; display:flex; justify-content:space-between; gap:6px; }
   .empty { color:var(--dim); text-align:center; padding:30px 0; }
   .hint { color:var(--yellow); font-size:10px; margin-top:6px; }
+  .badge { font-size:10px; border-radius:999px; padding:0 6px; border:1px solid var(--border); color:var(--dim); flex:none; }
+  .badge.codex { color:#10a37f; border-color:#10a37f; } .badge.claude { color:#d97757; border-color:#d97757; }
+  .badge.antigravity { color:#4285f4; border-color:#4285f4; } .badge.devin-local, .badge.devin-cloud { color:var(--purple); border-color:var(--purple); }
+  .st.waiting { background:var(--yellow); }
+  .provs { display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }
+  .provs span { font-size:10px; color:var(--dim); }
+  .provs i { display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--dim); margin-right:3px; }
+  .provs .active i { background:var(--green); } .provs .connected i { background:var(--accent); } .provs .error i, .provs .needs-key i { background:var(--red); }
+  a { color:var(--accent); }
   @media (prefers-reduced-motion: reduce) { .st.running, .flash { animation:none; } }
 </style>
 </head>
@@ -70,6 +79,10 @@ const ago = (ts) => { if (!ts) return '-'; const s = Math.max(0, Math.round((Dat
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
 const base = (p) => (p || '').split(/[\\/]/).filter(Boolean).pop() || p || '';
 const contains = (n, id) => n.id === id || n.children.some((c) => contains(c, id));
+const PNAME = { codex:'Codex', claude:'Claude', antigravity:'Antigravity', 'devin-local':'Devin', 'devin-cloud':'Devin 云' };
+const fmtAcu = (a) => (a === null || a === undefined ? '—' : (Math.round(a * 100) / 100) + ' ACU');
+const nodeCost = (n, sub) => (n.provider === 'devin-cloud' || (n.acus != null && !n.usage.total) ? fmtAcu(sub ? n.subtreeAcus : n.acus) : sub ? costCell(n.subtreeCost, n.subtreeCostPriced) : costCell(n.cost, n.costPriced));
+const label = (s) => s.title || base(s.cwd) || s.id.slice(-8);
 const prev = new Map();
 let state = null;
 let choice = localStorage.getItem('ctm.mini.session') || 'auto';
@@ -89,8 +102,9 @@ function renderPicker() {
   const listed = state.sessions.slice(0, 20);
   const pinned = state.sessions.find((s) => s.id === choice);
   if (pinned && !listed.includes(pinned)) listed.push(pinned);
-  const opts = [`<option value="auto">自动跟随当前 Codex 会话</option>`].concat(
-    listed.map((s) => `<option value="${esc(s.id)}">${esc(base(s.cwd) || s.id.slice(-8))} · ${esc(s.id.slice(-6))} · ${fmt(s.subtreeUsage.total)}</option>`));
+  const multi = !!state.providers;
+  const opts = [`<option value="auto">自动跟随当前${multi ? '' : ' Codex '}会话</option>`].concat(
+    listed.map((s) => `<option value="${esc(s.id)}">${multi && s.provider ? esc(PNAME[s.provider] || s.provider) + ' · ' : ''}${esc(label(s))} · ${esc(s.id.slice(-6))} · ${s.provider === 'devin-cloud' ? fmtAcu(s.subtreeAcus) : fmt(s.subtreeUsage.total)}</option>`));
   const html = opts.join('');
   if (pick.dataset.html !== html) { pick.innerHTML = html; pick.dataset.html = html; }
   pick.value = state.sessions.some((s) => s.id === choice) ? choice : 'auto';
@@ -103,10 +117,10 @@ function agentRows(n, prefix, indent, out) {
   const isMain = n.depth === 0 && !n.nickname;
   const ctx = n.contextWindow ? ` · 上下文 ${Math.min(100, Math.round(n.contextUsed / n.contextWindow * 100))}%` : '';
   out.push(`<div class="ag ${isMain ? '' : 'child'} ${changed ? 'flash' : ''}">
-    <span class="nm"><span class="tree">${prefix}</span><span class="st ${n.status}"></span>${esc(isMain ? 'main' : n.name)}</span>
+    <span class="nm"><span class="tree">${prefix}</span><span class="st ${esc(n.status)}"></span>${esc(isMain ? 'main' : n.name)}</span>
     <span class="dl">${n.last.total ? '+' + fmt(n.last.total) : ''}</span>
     <span class="tot">${fmt(n.usage.total)}</span>
-    <span class="meta">${n.role ? `<span class="r">${esc(n.role)}</span> · ` : ''}<span class="m">${esc(n.model || '-')}</span> · in ${fmt(n.usage.input)} / out ${fmt(n.usage.output)} · ${costCell(n.cost, n.costPriced)} · ${n.requests} 次${ctx} · ${ago(n.updatedAt)}</span>
+    <span class="meta">${n.role ? `<span class="r">${esc(n.role)}</span> · ` : ''}<span class="m">${esc(n.model || '-')}</span> · ${n.provider === 'devin-cloud' ? fmtAcu(n.acus) : `in ${fmt(n.usage.input)} / out ${fmt(n.usage.output)} · ${nodeCost(n)} · ${n.requests} 次`}${ctx} · ${ago(n.updatedAt)}</span>
   </div>`);
   n.children.forEach((c, i) => {
     const last = i === n.children.length - 1;
@@ -118,7 +132,8 @@ function render() {
   if (!state) return;
   renderPicker();
   const { s, auto, followed } = current();
-  if (!s) { $('body').innerHTML = '<div class="empty">还没有会话。在 Codex 里发一条消息后这里会实时显示。</div>'; return; }
+  const provs = state.providers ? `<div class="provs">${state.providers.filter((p) => p.state !== 'not-found').map((p) => `<span class="${esc(p.state)}" title="${esc(p.detail || p.state)}"><i></i>${esc(PNAME[p.id] || p.name)}</span>`).join('')}</div>` : '';
+  if (!s) { $('body').innerHTML = `<div class="empty">还没有会话。在 ${state.providers ? 'Codex / Claude Code / Antigravity / Devin' : 'Codex'} 里发一条消息后这里会实时显示。</div>${provs}`; return; }
   const u = s.subtreeUsage;
   let delta = 0;
   (function walk(n) { delta += n.last.total || 0; n.children.forEach(walk); })(s);
@@ -126,9 +141,9 @@ function render() {
   agentRows(s, '', '', rows);
   const subCount = (function count(n) { return n.children.reduce((a, c) => a + 1 + count(c), 0); })(s);
   $('body').innerHTML = `
-    <div class="title"><b title="${esc(s.cwd || '')}">${esc(base(s.cwd) || '会话')}</b>${auto && followed ? '<span class="follow">跟随中</span>' : ''}</div>
+    <div class="title">${state.providers && s.provider ? `<span class="badge ${esc(s.provider)}">${esc(PNAME[s.provider] || s.provider)}</span>` : ''}<b title="${esc(s.cwd || '')}">${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(label(s))}</a>` : esc(label(s))}</b>${auto && followed ? '<span class="follow">跟随中</span>' : ''}</div>
     <div class="sub">会话 ${esc(s.id)}</div>
-    <div class="big"><span class="v">${fmt(u.total)}</span><span class="d">${delta ? '最近 +' + fmt(delta) : ''}</span><span class="d" style="color:var(--yellow)">${costCell(s.subtreeCost, s.subtreeCostPriced)}</span></div>
+    <div class="big"><span class="v">${fmt(u.total)}</span><span class="d">${delta ? '最近 +' + fmt(delta) : ''}</span><span class="d" style="color:var(--yellow)">${nodeCost(s, true)}</span></div>
     <div class="grid">
       <div><div class="k">输入</div><div class="n">${fmt(u.input)}</div></div>
       <div><div class="k">缓存</div><div class="n">${fmt(u.cached)}</div></div>
@@ -136,14 +151,23 @@ function render() {
       <div><div class="k">推理</div><div class="n">${fmt(u.reasoning)}</div></div>
     </div>
     <div class="agents">${rows.join('')}</div>
-    <div class="foot"><span>${subCount ? `${subCount} 个子代理 ${fmt(u.total - s.usage.total)}` : '无子代理'}</span><span>${new Date().toLocaleTimeString()}</span></div>`;
+    <div class="foot"><span>${subCount ? `${subCount} 个子代理 ${fmt(u.total - s.usage.total)}` : '无子代理'}</span><span>${new Date().toLocaleTimeString()}</span></div>${provs}`;
 }
 
 $('pick').onchange = (e) => { choice = e.target.value; localStorage.setItem('ctm.mini.session', choice); render(); };
 
 // Document Picture-in-Picture keeps the mini view above every other window (Chrome / Edge 116+).
 let pip = null;
+// Inside the Agent Token Meter desktop app the window itself can stay on top.
+if (window.atm && window.atm.setAlwaysOnTop) {
+  window.atm.isAlwaysOnTop().then((on) => { $('pin').textContent = on ? '取消置顶' : '置顶'; });
+}
 $('pin').onclick = async () => {
+  if (window.atm && window.atm.setAlwaysOnTop) {
+    const on = await window.atm.setAlwaysOnTop($('pin').textContent === '置顶');
+    $('pin').textContent = on ? '取消置顶' : '置顶';
+    return;
+  }
   if (pip) { pip.close(); return; }
   if (!('documentPictureInPicture' in window)) {
     $('hint').hidden = false;

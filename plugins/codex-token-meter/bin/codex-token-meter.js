@@ -5,12 +5,17 @@ import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { RolloutStore, defaultCodexHome } from '../src/store.js';
+import { Hub, parseProviders, PROVIDER_IDS } from '../src/hub.js';
 import { runTui } from '../src/tui.js';
 import { startWeb } from '../src/web.js';
 import { fmtNum, fmtCost } from '../src/format.js';
 import { runMcp } from '../src/mcp.js';
 
-const HELP = `codex-token-meter — 实时查看 Codex 主代理/子代理的 token 用量、输入输出和模型
+const SELF_NAME = path.basename(process.argv[1] || '').replace(/\.(c|m)?js$/, '');
+const MULTI_DEFAULT = process.env.AGENT_TOKEN_METER_DEFAULT === 'all' || SELF_NAME.startsWith('agent-token-meter');
+
+const HELP = `codex-token-meter / agent-token-meter — 实时查看 Codex、Claude Code、Antigravity、Devin 主代理/子代理的 token 用量、输入输出和模型
+(agent-token-meter 默认连接全部来源; codex-token-meter 默认只看 Codex, 可用 --providers 改)
 
 用法:
   codex-token-meter [tui]          终端实时面板 (默认)
@@ -23,6 +28,8 @@ const HELP = `codex-token-meter — 实时查看 Codex 主代理/子代理的 to
   codex-token-meter mcp            stdio MCP 服务 (Codex CLI 状态栏 + token_usage 工具, 插件使用)
 
 选项:
+  --providers <list>   数据来源: all 或逗号分隔 ${PROVIDER_IDS.join(',')},devin (默认 ${MULTI_DEFAULT ? 'all' : 'codex'})
+                       Devin 云端需要 $DEVIN_API_KEY (可选 $DEVIN_ORG_ID)
   --codex-home <dir>   Codex 数据目录 (默认 $CODEX_HOME 或 ~/.codex)
   --port <n>           网页端口 (默认 4399, 或 $CODEX_TOKEN_METER_PORT)
   --host <addr>        网页监听地址 (默认 127.0.0.1)
@@ -37,7 +44,7 @@ const HELP = `codex-token-meter — 实时查看 Codex 主代理/子代理的 to
 `;
 
 function parseArgs(argv) {
-  const opts = { cmd: 'tui', port: Number(process.env.CODEX_TOKEN_METER_PORT) || 4399, host: '127.0.0.1', since: 24, codexHome: defaultCodexHome() };
+  const opts = { cmd: 'tui', port: Number(process.env.CODEX_TOKEN_METER_PORT) || 4399, host: '127.0.0.1', since: 24, codexHome: defaultCodexHome(), providers: process.env.AGENT_TOKEN_METER_PROVIDERS || (MULTI_DEFAULT ? 'all' : 'codex') };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -51,6 +58,7 @@ function parseArgs(argv) {
     else if (a === '--limit') opts.limit = Number(next());
     else if (a === '--pricing-file') opts.pricingFile = next();
     else if (a === '--focus') opts.focus = true;
+    else if (a === '--providers') opts.providers = next();
     else if (!a.startsWith('-')) opts.cmd = a;
   }
   return opts;
@@ -116,13 +124,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function ensureWeb(opts) {
   const running = await runningMeter(opts.host, opts.port);
   if (running && !sameHome(running, opts)) {
-    console.error(`端口 ${opts.port} 已被监控 ${running.codexHome} 的仪表盘占用，未为 ${opts.codexHome} 启动`);
+    console.error(`端口 ${opts.port} 已被另一个仪表盘占用 (${running.codexHome}, 来源 ${(running.providers || ['codex']).join(',')})，未启动; 请用 --port 换一个端口`);
     return false;
   }
   if (running) return true;
   const self = fileURLToPath(import.meta.url);
   const args = [self, 'web', '--port', String(opts.port), '--host', opts.host, '--codex-home', opts.codexHome, '--since', String(opts.since)];
   if (opts.pricingFile) args.push('--pricing-file', opts.pricingFile);
+  args.push('--providers', opts.providers);
   spawn(process.execPath, args, { detached: true, stdio: 'ignore' }).unref();
   for (let i = 0; i < 20; i++) {
     await sleep(150);
@@ -154,7 +163,9 @@ function openMini(url) {
   spawn(browser, [`--app=${url}`, '--window-size=380,560', '--window-position=40,80'], { detached: true, stdio: 'ignore' }).unref();
 }
 
-const sameHome = (h, opts) => !h.codexHome || path.resolve(h.codexHome) === path.resolve(opts.codexHome);
+// A running dashboard is reusable when it serves at least the requested providers.
+const sameProviders = (h, opts) => parseProviders(opts.providers).every((id) => (h.providers || ['codex']).includes(id));
+const sameHome = (h, opts) => (!h.codexHome || path.resolve(h.codexHome) === path.resolve(opts.codexHome)) && sameProviders(h, opts);
 
 async function web(store, opts, { quiet = false } = {}) {
   const url = `http://${opts.host === '0.0.0.0' ? '127.0.0.1' : opts.host}:${opts.port}`;
@@ -163,7 +174,7 @@ async function web(store, opts, { quiet = false } = {}) {
   } catch (e) {
     const running = e.code === 'EADDRINUSE' ? await runningMeter(opts.host, opts.port) : null;
     if (running && !sameHome(running, opts)) {
-      console.error(`端口 ${opts.port} 已被监控 ${running.codexHome} 的仪表盘占用，请用 --port 换一个端口`);
+      console.error(`端口 ${opts.port} 已被另一个仪表盘占用 (${running.codexHome}, 来源 ${(running.providers || ['codex']).join(',')})，请用 --port 换一个端口`);
       process.exit(1);
     }
     if (running) {
@@ -180,16 +191,18 @@ async function web(store, opts, { quiet = false } = {}) {
 
 function printSummary(snap, limit = 5) {
   const T = snap.totals;
+  const acu = (a) => (a == null ? '' : `, ${Math.round(a * 100) / 100} ACU`);
   const costOf = (cost, priced) => (cost === null || cost === undefined ? '费用未知' : `费用约 ${priced ? '' : '~'}${fmtCost(cost)}`);
   const line = (u, cost, priced) => `总计 ${fmtNum(u.total)} (输入 ${fmtNum(u.input)}, 缓存 ${fmtNum(u.cached)}, 输出 ${fmtNum(u.output)}, 推理 ${fmtNum(u.reasoning)}, ${costOf(cost, priced)})`;
-  console.log(`全部: ${line(T.all, T.cost, T.costPriced)}`);
+  for (const p of snap.providers || []) console.log(`[${p.name}] ${p.state}${p.sessions ? ` · ${p.sessions} 个会话` : ''}${p.running?.length ? ` · 运行中: ${p.running.join(', ')}` : ''}${p.detail ? ` · ${p.detail}` : ''}`);
+  console.log(`全部: ${line(T.all, T.cost, T.costPriced)}${acu(T.acus)}`);
   console.log(`子代理: ${line(T.subagents, T.subagents.cost, T.subagents.priced)}`);
   for (const [m, u] of Object.entries(T.byModel)) console.log(`  模型 ${m}: ${line(u, u.cost, u.priced)}`);
-  if (snap.pricing) console.log(`费用为估算 (OpenAI 定价 ${snap.pricing.date})，不是账单。`);
+  if (snap.pricing) console.log(`费用为估算 (官方 API 定价 ${snap.pricing.date})，不是账单。`);
   for (const s of snap.sessions.slice(0, limit)) {
-    console.log(`\n会话 ${s.id} (${s.cwd || '-'})`);
+    console.log(`\n${snap.providers ? `[${s.provider}] ` : ''}会话 ${s.id} (${s.title || s.cwd || '-'})`);
     const walk = (n, indent) => {
-      console.log(`${indent}${n.depth === 0 && !n.nickname ? 'main' : n.name} [${n.role || '-'}] ${n.model || '-'} ${n.status}: ${line(n.usage, n.cost, n.costPriced)}, ${n.requests} 次请求`);
+      console.log(`${indent}${n.depth === 0 && !n.nickname ? 'main' : n.name} [${n.role || '-'}] ${n.model || '-'} ${n.status}: ${line(n.usage, n.cost, n.costPriced)}${acu(n.acus)}, ${n.requests} 次请求`);
       n.children.forEach((c) => walk(c, indent + '  '));
     };
     walk(s, '  ');
@@ -204,17 +217,31 @@ if (opts.cmd === 'mcp' && !process.env.CODEX_HOME && !process.argv.includes('--c
   const m = fileURLToPath(import.meta.url).match(/^(.*)[\\/]plugins[\\/]cache[\\/]/);
   if (m) opts.codexHome = m[1];
 }
-const store = new RolloutStore({ codexHome: opts.codexHome, sinceHours: opts.since, pricingFile: opts.pricingFile });
+let providerIds;
+try {
+  providerIds = parseProviders(opts.providers);
+} catch (e) {
+  console.error(e.message);
+  process.exit(1);
+}
+// The Codex plugin surfaces (mcp, statusline, hooks) stay Codex-only.
+if (opts.cmd === 'mcp') providerIds = ['codex'];
+const store =
+  providerIds.length === 1 && providerIds[0] === 'codex'
+    ? new RolloutStore({ codexHome: opts.codexHome, sinceHours: opts.since, pricingFile: opts.pricingFile })
+    : new Hub({ providers: providerIds, codexHome: opts.codexHome, sinceHours: opts.since, pricingFile: opts.pricingFile });
 
 switch (opts.cmd) {
   case 'help':
     console.log(HELP);
     break;
   case 'json':
-    console.log(JSON.stringify(store.loadOnce().snapshot({ limit: opts.limit || 20 }), null, 2));
+    await store.loadOnce();
+    console.log(JSON.stringify(store.snapshot({ limit: opts.limit || 20 }), null, 2));
     break;
   case 'summary':
-    printSummary(store.loadOnce().snapshot({ limit: opts.limit || 20 }), opts.limit);
+    await store.loadOnce();
+    printSummary(store.snapshot({ limit: opts.limit || 20 }), opts.limit);
     break;
   case 'web':
     store.start();

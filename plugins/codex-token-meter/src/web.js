@@ -15,11 +15,26 @@ const isSameOrigin = (origin, host) => {
   }
 };
 
+// Cloud-account data (Devin sessions fetched with the user's API key) is only
+// served to our own pages, never to other origins reading the CORS-open state.
+export function redactAccountData(snap) {
+  if (!snap.byProvider || !snap.byProvider['devin-cloud']) return snap;
+  const { 'devin-cloud': _hidden, ...byProvider } = snap.byProvider;
+  return {
+    ...snap,
+    providers: (snap.providers || []).filter((p) => p.id !== 'devin-cloud'),
+    sessions: snap.sessions.filter((s) => s.provider !== 'devin-cloud'),
+    byProvider,
+    totals: { ...snap.totals, acus: null },
+  };
+}
+
 export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
   const clients = new Set();
   // The session the user last interacted with in Codex (reported by the plugin hooks).
   let focus = null;
-  const snapshot = (limit = 30) => ({ ...store.snapshot({ limit }), focus });
+  // Per-provider limit so a busy source cannot crowd the others out of the dashboard's provider filter.
+  const snapshot = (limit = 30) => ({ ...store.snapshot({ limit, perProvider: true }), focus });
   let pending = null;
   const broadcast = () => {
     const data = `data: ${JSON.stringify(snapshot())}\n\n`;
@@ -55,7 +70,9 @@ export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
     if (url.pathname === '/api/state') {
       // Read-only local data; CORS-open so sandboxed MCP app widgets (any origin) can poll it.
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*' });
-      return res.end(JSON.stringify(snapshot(Number(url.searchParams.get('limit')) || 30)));
+      const snap = snapshot(Number(url.searchParams.get('limit')) || 30);
+      const crossOrigin = req.headers.origin && !isSameOrigin(req.headers.origin, req.headers.host);
+      return res.end(JSON.stringify(crossOrigin ? redactAccountData(snap) : snap));
     }
     if (url.pathname === '/api/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
@@ -91,7 +108,7 @@ export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
     }
     if (url.pathname === '/api/health') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ ok: true, app: 'codex-token-meter', codexHome: store.codexHome }));
+      return res.end(JSON.stringify({ ok: true, app: 'codex-token-meter', codexHome: store.codexHome, providers: store.ids || ['codex'] }));
     }
     if (url.pathname === '/' || url.pathname === '/index.html') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -107,8 +124,14 @@ export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
     server.once('error', reject);
     server.listen(port, host, () => {
       store.on('change', push);
-      setInterval(() => { if (clients.size) broadcast(); }, 1000).unref();
-      setInterval(() => {
+      const timers = [];
+      server.on('close', () => {
+        store.off('change', push);
+        timers.forEach(clearInterval);
+        clearTimeout(pending);
+      });
+      timers.push(setInterval(() => { if (clients.size) broadcast(); }, 1000).unref());
+      timers.push(setInterval(() => {
         for (const res of clients) {
           try {
             res.write(': ping\n\n');
@@ -116,7 +139,7 @@ export function startWeb(store, { port = 4399, host = '127.0.0.1' } = {}) {
             clients.delete(res);
           }
         }
-      }, 15000).unref();
+      }, 15000).unref());
       resolve(server);
     });
   });

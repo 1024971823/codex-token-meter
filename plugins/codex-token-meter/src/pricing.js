@@ -55,7 +55,29 @@ export const PRICING = {
   'gpt-6.2-sol': { input: 2, cached: 0.1, output: 10 },
   'gpt-6-astra': { input: 10, cached: 1, output: 50 },
   'gpt-6.2-astra': { input: 8, cached: 0.4, output: 40 },
+  // Anthropic Claude (https://www.anthropic.com/pricing): cached = cache read,
+  // cacheWrite = 5-minute cache write. Used for Claude Code / Antigravity.
+  'claude-opus-4-5': { input: 5, cached: 0.5, cacheWrite: 6.25, output: 25 },
+  'claude-opus-4-1': { input: 15, cached: 1.5, cacheWrite: 18.75, output: 75 },
+  'claude-opus-4': { input: 15, cached: 1.5, cacheWrite: 18.75, output: 75 },
+  'claude-sonnet-4-5': { input: 3, cached: 0.3, cacheWrite: 3.75, output: 15 },
+  'claude-sonnet-4': { input: 3, cached: 0.3, cacheWrite: 3.75, output: 15 },
+  'claude-3-7-sonnet': { input: 3, cached: 0.3, cacheWrite: 3.75, output: 15 },
+  'claude-haiku-4-5': { input: 1, cached: 0.1, cacheWrite: 1.25, output: 5 },
+  'claude-3-5-haiku': { input: 0.8, cached: 0.08, cacheWrite: 1, output: 4 },
+  // Google Gemini (https://ai.google.dev/gemini-api/docs/pricing), prompts <= 200k tokens.
+  'gemini-3-pro': { input: 2, cached: 0.2, output: 12 },
+  'gemini-2.5-pro': { input: 1.25, cached: 0.125, output: 10 },
+  'gemini-2.5-flash': { input: 0.3, cached: 0.03, output: 2.5 },
+  'gemini-2.5-flash-lite': { input: 0.1, cached: 0.01, output: 0.4 },
 };
+
+// Aliases resolved after normalization (Antigravity display ids, effort variants).
+const MODEL_ALIASES = [
+  [/^claude-(opus|sonnet|haiku)-(\d)\.(\d)$/, 'claude-$1-$2-$3'],
+  [/^claude-(\d)\.(\d)-(opus|sonnet|haiku)$/, 'claude-$3-$1-$2'],
+  [/^(gemini-[\d.]+-(?:pro|flash(?:-lite)?))(?:-preview)?(?:-(?:high|medium|low|extra-low|thinking))?$/, '$1'],
+];
 
 /** Normalizes a model id for lookup: lowercase, trims, drops a dated snapshot suffix. */
 export function normalizeModelName(model) {
@@ -63,13 +85,20 @@ export function normalizeModelName(model) {
   let name = model.trim().toLowerCase();
   // gpt-5-2025-08-07 -> gpt-5 ; gpt-5-codex-2025-09-15 -> gpt-5-codex
   name = name.replace(/-\d{4}-\d{2}-\d{2}$/, '');
+  // claude-sonnet-4-5-20250929 -> claude-sonnet-4-5 ; also strips Bedrock/Vertex-style prefixes.
+  name = name.replace(/-\d{8}$/, '').replace(/^(?:anthropic\.|models\/)/, '').replace(/@\d{8}$/, '').replace(/-v\d+:\d+$/, '');
   return name || null;
 }
 
 export function getModelPricing(model, table = PRICING) {
   const name = normalizeModelName(model);
   if (!name || !table) return null;
-  return table[name] || null;
+  if (table[name]) return table[name];
+  for (const [re, to] of MODEL_ALIASES) {
+    const alias = name.replace(re, to);
+    if (alias !== name && table[alias]) return table[alias];
+  }
+  return null;
 }
 
 function validRate(v) {
@@ -134,18 +163,22 @@ export function estimateCost(usage, model, table = PRICING) {
   const input = Math.max(0, u.input || 0);
   // cached is a subset of input; clamp so corrupt records cannot go negative.
   const cached = Math.min(Math.max(0, u.cached || 0), input);
-  const uncached = input - cached;
+  // Providers with a distinct cache-write price (Anthropic) bill those tokens
+  // separately; otherwise they stay inside the uncached input line.
+  const cacheWrite = rate.cacheWrite != null ? Math.min(Math.max(0, u.cacheWrite || 0), input - cached) : 0;
+  const uncached = input - cached - cacheWrite;
   const output = Math.max(0, u.output || 0);
-  // cacheWrite tokens are already inside `input` and are charged at the input
-  // rate as part of the uncached line (see the header comment). Reasoning
+  // Without a cacheWrite rate those tokens stay in the uncached input line
+  // (see the header comment). Reasoning
   // tokens are already inside `output` and are charged at the output rate.
   const breakdown = {
     input: (uncached * rate.input) / 1e6,
     cached: (cached * rate.cached) / 1e6,
+    cacheWrite: (cacheWrite * (rate.cacheWrite || 0)) / 1e6,
     output: (output * rate.output) / 1e6,
   };
   return {
-    cost: breakdown.input + breakdown.cached + breakdown.output,
+    cost: breakdown.input + breakdown.cached + breakdown.cacheWrite + breakdown.output,
     currency: PRICING_CURRENCY,
     model: normalizeModelName(model),
     priced: true,
