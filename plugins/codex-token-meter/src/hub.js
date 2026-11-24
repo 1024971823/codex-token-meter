@@ -54,7 +54,7 @@ export class Hub extends EventEmitter {
       codex: () => new RolloutStore({ ...common, codexHome }),
       claude: () => new ClaudeStore({ ...common, roots: roots.claude || claudeRoots() }),
       antigravity: () => new AntigravityStore({ ...common, roots: roots.antigravity || antigravityRoots() }),
-      'devin-local': () => new DevinLocalStore({ ...common, roots: roots.devinLocal || devinDataRoots() }),
+      'devin-local': () => new DevinLocalStore({ ...common, roots: roots.devinLocal || devinDataRoots(), desktopRoots: roots.devinDesktop }),
       'devin-cloud': () =>
         new DevinCloudStore({
           ...common,

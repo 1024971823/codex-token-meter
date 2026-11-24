@@ -114,7 +114,7 @@ test('devin local: tolerant session-folder reader sums usage and ACUs once', () 
   fs.writeFileSync(path.join(s1, 'meta.json'), JSON.stringify({ id: 's1', title: 'fix bug', cwd: '/w', model: 'claude-sonnet-4-5' }));
   const rec = { type: 'model_response', id: 'r1', model: 'claude-sonnet-4-5', usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 } };
   fs.writeFileSync(path.join(s1, 'events.jsonl'), [rec, rec, { acu_cost: 0.25 }].map((r) => JSON.stringify(r)).join('\n') + '\n');
-  const [s] = new DevinLocalStore({ roots: [dir] }).loadOnce().snapshot().sessions;
+  const [s] = new DevinLocalStore({ roots: [dir], desktopRoots: [] }).loadOnce().snapshot().sessions;
   assert.equal(s.provider, 'devin-local');
   assert.equal(s.title, 'fix bug');
   assert.equal(s.usage.total, 115);
@@ -155,7 +155,7 @@ test('devin local: sessions.db yields desktop sessions, context-delta usage and 
   const dir = tmp();
   fs.mkdirSync(path.join(dir, 'cli'), { recursive: true });
   await writeDevinSessionsDb(path.join(dir, 'cli', 'sessions.db'));
-  const store = new DevinLocalStore({ roots: [dir], sinceHours: 72 });
+  const store = new DevinLocalStore({ roots: [dir], desktopRoots: [], sinceHours: 72 });
   await store.loadOnceAsync();
   const sessions = store.snapshot().sessions;
   assert.equal(sessions.length, 1); // hidden session filtered out
@@ -172,6 +172,42 @@ test('devin local: sessions.db yields desktop sessions, context-delta usage and 
   const tail = Math.ceil(Buffer.byteLength(JSON.stringify({ message_id: 'm', role: 'assistant', content: 'x' })) / 4);
   assert.deepEqual(s.usage, { input: 1000 + 300 + 500 + tail, cached: 0, cacheWrite: 0, output: 300, reasoning: 0, total: 2100 + tail });
   assert.equal(s.requests, 3);
+  store.stop();
+});
+
+async function writeDevinAcpFixture(userDir) {
+  const SQL = await require('sql.js')();
+  fs.mkdirSync(path.join(userDir, 'globalStorage'), { recursive: true });
+  const sdb = new SQL.Database();
+  sdb.run('CREATE TABLE ItemTable (key TEXT, value TEXT)');
+  sdb.run('INSERT INTO ItemTable VALUES (?,?)', ['windsurf.acp.messageStore.session.acp/devin-cli/test-session', JSON.stringify({ uuid: 'uuid-1', lastUpdated: Date.now() })]);
+  sdb.run('INSERT INTO ItemTable VALUES (?,?)', ['devin.desktopShell.localSessionAnnotations.org-x', JSON.stringify({ 'devin-acp/devin-cli/test-session': { done: false } })]);
+  fs.writeFileSync(path.join(userDir, 'globalStorage', 'state.vscdb'), Buffer.from(sdb.export()));
+  sdb.close();
+  fs.mkdirSync(path.join(userDir, 'acp-messages'), { recursive: true });
+  const adb = new SQL.Database();
+  adb.run('CREATE TABLE meta (key TEXT, value TEXT); CREATE TABLE messages (position INTEGER PRIMARY KEY, kind TEXT, payload TEXT)');
+  adb.run("INSERT INTO meta VALUES ('message_count','3')");
+  adb.run("INSERT INTO messages VALUES (1,'user_message',?)", [JSON.stringify({ kind: 'user_message', content: [{ content: { text: '历史会话第一条消息' } }] })]);
+  adb.run("INSERT INTO messages VALUES (2,'agent_message','{}')");
+  adb.run("INSERT INTO messages VALUES (3,'tool_call','{}')");
+  fs.writeFileSync(path.join(userDir, 'acp-messages', 'uuid-1.db'), Buffer.from(adb.export()));
+  adb.close();
+}
+
+test('devin local: desktop acp index + message stores list past conversations', async () => {
+  const dir = tmp();
+  const userDir = path.join(dir, 'User');
+  await writeDevinAcpFixture(userDir);
+  const store = new DevinLocalStore({ roots: [path.join(dir, 'nope')], desktopRoots: [userDir], sinceHours: 1e7 });
+  await store.loadOnceAsync();
+  const [s] = store.snapshot().sessions;
+  assert.equal(s.id, 'acp:test-session');
+  assert.equal(s.title, '历史会话第一条消息');
+  assert.equal(s.source, 'desktop:devin-cli');
+  assert.equal(s.requests, 2);
+  assert.equal(s.usage.total, 0);
+  assert.equal(s.status, 'running');
   store.stop();
 });
 
@@ -226,7 +262,7 @@ test('hub: detects every provider, merges sessions and serves them over the dash
   const hub = new Hub({
     codexHome: path.join(HERE, 'fixtures'),
     sinceHours: 1e7,
-    roots: { claude: [CLAUDE], antigravity: [ag], devinLocal: [path.join(empty, 'missing')] },
+    roots: { claude: [CLAUDE], antigravity: [ag], devinLocal: [path.join(empty, 'missing')], devinDesktop: [] },
     devin: { apiKey: 'cog_test' },
     fetchImpl: fakeDevinApi(),
   });

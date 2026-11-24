@@ -18,6 +18,19 @@ export function devinDataRoots(env = process.env) {
   return roots;
 }
 
+/** Devin Desktop (the Windsurf-based IDE) config dirs: <root>/User holds
+ * globalStorage/state.vscdb (session index) and acp-messages/<uuid>.db
+ * (per-session message stores). */
+export function devinDesktopRoots(env = process.env) {
+  if (env.DEVIN_DESKTOP_DIR) return env.DEVIN_DESKTOP_DIR.split(',').map((d) => path.resolve(d.trim())).filter(Boolean);
+  const home = os.homedir();
+  const roots = [];
+  if (process.platform === 'darwin') roots.push(path.join(home, 'Library', 'Application Support', 'Devin', 'User'));
+  else if (process.platform === 'win32' && env.APPDATA) roots.push(path.join(env.APPDATA, 'Devin', 'User'));
+  else roots.push(path.join(env.XDG_CONFIG_HOME || path.join(home, '.config'), 'Devin', 'User'));
+  return roots;
+}
+
 /** Normalizes the usage shapes seen in model APIs (Anthropic/OpenAI/Gemini). */
 export function normalizeAnyUsage(u) {
   if (!u || typeof u !== 'object') return null;
@@ -53,9 +66,10 @@ function collect(value, sink, depth = 0) {
 }
 
 export class DevinLocalStore extends ThreadStore {
-  constructor({ roots = devinDataRoots(), sinceHours = 24, scanMs = 4000, pricingFile, pricing } = {}) {
+  constructor({ roots = devinDataRoots(), desktopRoots, sinceHours = 24, scanMs = 4000, pricingFile, pricing } = {}) {
     super({ sinceHours, pricingFile, pricing, providerId: 'devin-local' });
     this.roots_ = roots;
+    this.desktopRoots = desktopRoots === undefined ? devinDesktopRoots() : desktopRoots;
     this.scanMs = scanMs;
     this.sigs = new Map();
     this.dbSigs = new Map();
@@ -195,12 +209,122 @@ export class DevinLocalStore extends ThreadStore {
     }
   }
 
+  /**
+   * Devin Desktop (Windsurf IDE) conversations. The session index lives in
+   * globalStorage/state.vscdb as keys
+   * `windsurf.acp.messageStore.session.acp/<backend>/<slug>` -> {uuid,lastUpdated},
+   * where uuid is the per-session message store `acp-messages/<uuid>.db`
+   * (meta + messages tables). Those dbs carry no token fields, so acp-only
+   * sessions show title/message stats with zero usage; slugs already covered
+   * by sessions.db keep their richer token data.
+   */
+  async refreshAcpSessions() {
+    const cutoff = Date.now() - this.sinceMs;
+    let changed = false;
+    const live = new Set();
+    for (const root of this.desktopRoots) {
+      const stateDb = await openReadOnly(path.join(root, 'globalStorage', 'state.vscdb'));
+      if (!stateDb) continue;
+      let index;
+      const annotations = {};
+      try {
+        if (!stateDb.all("select name from sqlite_master where type='table' and name='ItemTable'").length) continue;
+        index = stateDb.all("select key, value from ItemTable where key like 'windsurf.acp.messageStore.session.acp/%'");
+        for (const r of stateDb.all("select value from ItemTable where key like 'devin.desktopShell.localSessionAnnotations.%'")) {
+          try {
+            for (const [k, v] of Object.entries(JSON.parse(r.value || '{}'))) annotations[k] = v || {};
+          } catch {}
+        }
+      } finally {
+        stateDb.close();
+      }
+      for (const row of index) {
+        const m = /^windsurf\.acp\.messageStore\.session\.acp\/([^/]+)\/(.+)$/.exec(row.key || '');
+        if (!m) continue;
+        const [, backend, slugPath] = m;
+        const slug = slugPath.split('/').pop() || slugPath; // cloud entries nest a cache path
+        if (this.threads.has(`db:${slug}`)) continue; // sessions.db already covers it
+        let info = {};
+        try {
+          info = JSON.parse(row.value || '{}');
+        } catch {}
+        const dbFile = path.join(root, 'acp-messages', `${info.uuid || slug}.db`);
+        let st;
+        try {
+          st = fs.statSync(dbFile);
+        } catch {
+          continue; // index entry without a message store
+        }
+        const ann = annotations[`devin-acp/${backend}/${slugPath}`] || {};
+        if (ann.empty) continue;
+        const sig = `${dbFile}:${st.size}:${st.mtimeMs}:${info.lastUpdated || 0}`;
+        const id = `acp:${slug}`;
+        live.add(id);
+        const db = await openReadOnly(dbFile);
+        if (!db) continue;
+        try {
+          let meta = {};
+          const counts = {};
+          let title = null;
+          try {
+            for (const r of db.all('select kind, count(*) as c from messages group by kind')) counts[r.kind] = r.c;
+          } catch {}
+          try {
+            meta = Object.fromEntries(db.all('select key, value from meta'));
+          } catch {}
+          if (!Number(meta.message_count) && !Object.values(counts).some(Boolean)) continue; // empty store
+          try {
+            const u = db.all("select payload from messages where kind='user_message' order by position limit 1")[0];
+            if (u) {
+              const p = JSON.parse(u.payload);
+              const texts = (p.content || []).map((c) => c?.content?.text).filter(Boolean);
+              title = texts.join(' ').slice(0, 80) || null;
+            }
+          } catch {}
+          let lastMs = Number(info.lastUpdated) || 0;
+          try {
+            const skel = JSON.parse(meta.history_skeleton || '{}');
+            for (const it of skel.items || []) if (it.created_at_ms > lastMs) lastMs = it.created_at_ms;
+          } catch {}
+          const updatedMs = Math.max(lastMs, st.mtimeMs) || 0;
+          if (updatedMs < cutoff) continue;
+          const t = this.threads.get(id) || newThread(id, dbFile);
+          t.sessionId = slug;
+          t.title = title || slug;
+          t.nickname = t.title;
+          t.cwd = null;
+          t.depth = 0;
+          t.source = { kind: 'desktop', subKind: backend };
+          t.startedAt = null;
+          t.updatedAt = updatedMs || null;
+          t.requests = (counts.agent_message || 0) + (counts.tool_call || 0);
+          t.status = Date.now() - (t.updatedAt || 0) < 60000 ? 'running' : 'done';
+          this.threads.set(id, t);
+          if (this.dbSigs.get(id) !== sig) {
+            this.dbSigs.set(id, sig);
+            changed = true;
+          }
+        } finally {
+          db.close();
+        }
+      }
+    }
+    for (const id of [...this.threads.keys()]) {
+      if (id.startsWith('acp:') && !live.has(id)) {
+        this.threads.delete(id);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
   refreshSessionsDbs() {
     if (!this.dbBusy) {
       this.dbBusy = (async () => {
         try {
           let changed = false;
           for (const f of this.sessionDbs()) changed = (await this.refreshSessionsDb(f)) || changed;
+          changed = (await this.refreshAcpSessions()) || changed; // after sessions.db so db: slugs dedupe
           if (changed) this.bump();
         } catch {
           // unreadable/corrupt db: folder scan still runs; next tick retries
