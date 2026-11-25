@@ -80,9 +80,14 @@ async function writeAntigravityDb(file) {
 test('antigravity: model names normalize and price', () => {
   assert.equal(normalizeAntigravityModel('Gemini 3 Pro (High)'), 'gemini-3-pro-high');
   assert.equal(normalizeAntigravityModel(null, 334), 'claude-sonnet-4-5');
+  assert.equal(normalizeAntigravityModel(null, 1427, 'gemini-4-carbon'), 'gemini-4-carbon');
   assert.ok(getModelPricing('gemini-3-pro-high'));
   assert.ok(getModelPricing('claude-sonnet-4.5'));
   assert.ok(getModelPricing('claude-sonnet-4-5-20250929'));
+  // current-generation Gemini slugs and their tiered variants price to the base model
+  for (const m of ['gemini-4-hydrogen', 'gemini-4-hydrogen-tiered-high', 'gemini-4-carbon', 'gemini-4-neon', 'gemini-4-argon', 'gemini-3.8-flash-low', 'gemini-3.5-flash-lite']) {
+    assert.ok(getModelPricing(m), `pricing for ${m}`);
+  }
 });
 
 test('antigravity: reads SQLite conversations with protobuf usage and dedupes mirrored generations', async () => {
@@ -105,6 +110,29 @@ test('antigravity: reads SQLite conversations with protobuf usage and dedupes mi
   assert.equal(s.usage.total, 6200 + 340);
   assert.equal(s.costPriced, true);
   assert.equal(s.startedAt, 1795399990000);
+});
+
+test('antigravity: placeholder model ids resolve to the slug embedded in generation blobs', async () => {
+  const dir = tmp();
+  const conv = path.join(dir, 'antigravity', 'conversations');
+  fs.mkdirSync(conv, { recursive: true });
+  const SQL = await require('sql.js')();
+  const db = new SQL.Database();
+  db.run('CREATE TABLE gen_metadata (idx INTEGER, data BLOB); CREATE TABLE steps (idx INTEGER, metadata BLOB);');
+  // step usage only carries the numeric placeholder id (1427 = MODEL_PLACEHOLDER_M427)
+  const stepUsage = [[1, 1427], [2, 800], [3, 120], [11, 'resp-x']];
+  db.run('INSERT INTO steps VALUES (0, ?)', [encode([[9, stepUsage], [8, [[1, 1795400000]]]])]);
+  // the generation blob has no display-name field, only the cascade KV tail
+  db.run('INSERT INTO gen_metadata VALUES (0, ?)', [encode([[1, [[4, stepUsage], [30, 'model_enum'], [31, 'MODEL_PLACEHOLDER_M427'], [32, 'gemini-4-carbon']]], [2, 0]])]);
+  const file = path.join(conv, 'conv-ph.db');
+  fs.writeFileSync(file, Buffer.from(db.export()));
+  db.close();
+  const store = await new AntigravityStore({ roots: [conv], sinceHours: 1e7 }).loadOnceAsync();
+  const [s] = store.snapshot().sessions;
+  assert.equal(s.model, 'gemini-4-carbon');
+  assert.ok(!Object.keys(s.byModel).some((k) => k.includes('1427')));
+  assert.equal(s.usage.total, 920);
+  store.stop();
 });
 
 test('devin local: tolerant session-folder reader sums usage and ACUs once', () => {

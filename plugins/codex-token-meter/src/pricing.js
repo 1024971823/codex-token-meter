@@ -66,7 +66,21 @@ export const PRICING = {
   'claude-haiku-4-5': { input: 1, cached: 0.1, cacheWrite: 1.25, output: 5 },
   'claude-3-5-haiku': { input: 0.8, cached: 0.08, cacheWrite: 1, output: 4 },
   // Google Gemini (https://ai.google.dev/gemini-api/docs/pricing), prompts <= 200k tokens.
+  // Gemini 4 prices are the introductory rates in effect through 2026-11-30
+  // (they double for Carbon/Argon afterwards — this table is re-checked upstream).
+  'gemini-4-carbon': { input: 2, cached: 0.1, output: 10 },
+  'gemini-4-argon': { input: 2, cached: 0.1, output: 10 },
+  'gemini-4-neon': { input: 3, cached: 0.15, output: 15 },
+  'gemini-4-hydrogen': { input: 1.5, cached: 0.075, output: 7.5 },
+  'gemini-3.1-pro': { input: 2, cached: 0.2, output: 12 },
   'gemini-3-pro': { input: 2, cached: 0.2, output: 12 },
+  'gemini-3.8-flash': { input: 0.75, cached: 0.075, output: 3.75 },
+  'gemini-3.7-flash': { input: 0.75, cached: 0.075, output: 3.75 },
+  'gemini-3.6-flash': { input: 0.75, cached: 0.075, output: 3.75 },
+  'gemini-3.5-flash': { input: 1.5, cached: 0.15, output: 9 },
+  'gemini-3.5-flash-lite': { input: 0.3, cached: 0.03, output: 2.5 },
+  'gemini-3-flash': { input: 0.5, cached: 0.05, output: 3 },
+  'gemini-3.1-flash-lite': { input: 0.25, cached: 0.025, output: 1.5 },
   'gemini-2.5-pro': { input: 1.25, cached: 0.125, output: 10 },
   'gemini-2.5-flash': { input: 0.3, cached: 0.03, output: 2.5 },
   'gemini-2.5-flash-lite': { input: 0.1, cached: 0.01, output: 0.4 },
@@ -76,7 +90,7 @@ export const PRICING = {
 const MODEL_ALIASES = [
   [/^claude-(opus|sonnet|haiku)-(\d)\.(\d)$/, 'claude-$1-$2-$3'],
   [/^claude-(\d)\.(\d)-(opus|sonnet|haiku)$/, 'claude-$3-$1-$2'],
-  [/^(gemini-[\d.]+-(?:pro|flash(?:-lite)?))(?:-preview)?(?:-(?:high|medium|low|extra-low|thinking))?$/, '$1'],
+  [/^(gemini-[\d.]+-(?:pro|flash(?:-lite)?|hydrogen|carbon|argon|neon))(?:-preview)?(?:-(?:tiered-)?(?:x?high|medium|low|extra-low|thinking))?$/, '$1'],
 ];
 
 /** Normalizes a model id for lookup: lowercase, trims, drops a dated snapshot suffix. */

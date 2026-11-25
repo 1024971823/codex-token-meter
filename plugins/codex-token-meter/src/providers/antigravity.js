@@ -43,13 +43,41 @@ const MODEL_IDS = {
 };
 
 /** "Gemini 3 Pro (High)" -> "gemini-3-pro-high"; "Claude Sonnet 4.5 Thinking" -> "claude-sonnet-4.5". */
-export function normalizeAntigravityModel(text, id) {
+export function normalizeAntigravityModel(text, id, slug) {
   if (text) {
     const name = text.trim().toLowerCase().replace(/[()]/g, ' ').replace(/\bthinking\b/g, ' ').trim().replace(/\s+/g, '-');
     if (name && !/^model_placeholder/.test(name)) return name;
   }
+  // Server-assigned MODEL_PLACEHOLDER_M<n> ids (1000+n) carry no meaning locally;
+  // the real model slug is embedded next to `model_enum` in the same blob.
+  if (slug) return slug;
   if (id && MODEL_IDS[id]) return MODEL_IDS[id];
   return id ? `antigravity-model-${id}` : null;
+}
+
+const SLUG_RE = /(gemini|claude|gpt|deepseek|glm|kimi|qwen|grok|mistral|llama)-[0-9a-z][-0-9a-z.]*/g;
+
+/** Scans a metadata blob for the cascade model slug and the `model_enum` value.
+ * Since the placeholder-enum migration the numeric model id is meaningless by
+ * itself; the real slug (gemini-4-hydrogen, claude-sonnet-4-5, ...) sits in the
+ * cascade metadata that is appended at the end of the blob, so the LAST slug
+ * match wins — earlier hits are usually prompt/tool-description noise. */
+export function blobModelInfo(blob) {
+  if (!blob || !blob.length) return { slug: null, enumName: null };
+  const txt = (Buffer.isBuffer(blob) ? blob : Buffer.from(blob)).toString('latin1');
+  let slug = null;
+  let m;
+  SLUG_RE.lastIndex = 0;
+  while ((m = SLUG_RE.exec(txt))) {
+    if (m[0].length <= 40 && m[0] !== 'gemini-api') slug = m[0];
+  }
+  let enumName = null;
+  const at = txt.indexOf('model_enum');
+  if (at >= 0) {
+    const em = /MODEL_[A-Z0-9_]{4,}/.exec(txt.slice(at + 10, at + 80));
+    if (em) enumName = em[0];
+  }
+  return { slug, enumName };
 }
 
 function parseUsage(blob) {
@@ -86,9 +114,12 @@ export function parseGeneration(blob) {
   const f = decodeFields(chat);
   const gi = fieldBytes(f, 9);
   const steps = root.filter((x) => x.n === 2 && x.wire === 0).map((x) => Number(x.v));
+  const info = blobModelInfo(blob);
   return {
     model: fieldText(f, 19) || fieldText(f, 21),
     modelId: fieldVarint(f, 3) || null,
+    slug: info.slug,
+    enumName: info.enumName,
     usage: fieldBytes(f, 4) ? parseUsage(fieldBytes(f, 4)) : null,
     retries: retryUsages(f, 17),
     ts: gi ? parseTimestamp(fieldBytes(decodeFields(gi), 4)) : null,
@@ -99,9 +130,12 @@ export function parseGeneration(blob) {
 export function parseStep(blob) {
   const f = decodeFields(blob);
   const mi = fieldBytes(f, 24) ? decodeFields(fieldBytes(f, 24)) : [];
+  const info = blobModelInfo(blob);
   return {
     model: fieldText(mi, 12) || fieldText(mi, 8),
     modelId: fieldVarint(mi, 1) || null,
+    slug: info.slug,
+    enumName: info.enumName,
     usage: fieldBytes(f, 9) ? parseUsage(fieldBytes(f, 9)) : null,
     retries: retryUsages(f, 28),
     ts: parseTimestamp(fieldBytes(f, 8) || fieldBytes(f, 1)),
@@ -140,6 +174,15 @@ export async function readConversation(file) {
       });
     const steps = tables.has('steps') ? rows('SELECT idx, metadata FROM steps ORDER BY idx ASC', parseStep) : [];
     const gens = rows('SELECT idx, data FROM gen_metadata ORDER BY idx ASC', parseGeneration);
+    // Generation blobs carry the real model slug next to `model_enum`; step blobs
+    // don't. Learn modelId/enum -> slug from generations so step-level usage
+    // (whose usage blob only has the numeric modelId) resolves to real names too.
+    const learned = new Map();
+    for (const g of gens) {
+      if (!g.slug) continue;
+      for (const id of [g.modelId, g.usage?.modelId]) if (id) learned.set(id, g.slug);
+      if (g.enumName) learned.set(g.enumName, g.slug);
+    }
     const seen = new Set();
     const events = [];
     const stem = path.basename(file, '.db');
@@ -151,15 +194,15 @@ export async function readConversation(file) {
       const ids = u.ids.length ? u.ids : fallback;
       if (ids.some((id) => seen.has(id))) return;
       ids.forEach((id) => seen.add(id));
-      events.push({ ts: ts || trajectoryTs || Date.now(), model: model || normalizeAntigravityModel(null, u.modelId) || 'gemini-internal-model', usage });
+      events.push({ ts: ts || trajectoryTs || Date.now(), model: model || normalizeAntigravityModel(null, u.modelId, learned.get(u.modelId)) || 'gemini-internal-model', usage });
     };
     for (const s of steps) {
-      const model = normalizeAntigravityModel(s.model, s.modelId);
+      const model = normalizeAntigravityModel(s.model, s.modelId, s.slug || learned.get(s.modelId) || learned.get(s.usage?.modelId));
       push(s.usage, model, s.ts, [`step:${stem}:${s.idx}`]);
       s.retries.forEach((u) => push(u, model, s.ts, []));
     }
     for (const g of gens) {
-      const m = normalizeAntigravityModel(g.model, g.modelId || g.usage?.modelId);
+      const m = normalizeAntigravityModel(g.model, g.modelId || g.usage?.modelId, g.slug);
       if (m) current = m;
       const ids = g.steps.length ? g.steps.map((i) => `step:${stem}:${i}`) : [`gen:${stem}:${g.idx}`];
       push(g.usage, current, g.ts, ids);
